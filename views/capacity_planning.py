@@ -311,15 +311,31 @@ def render():
         _tons_fin=_s(row,"Tons_Finished")
         _sys_hrs=(_b_d/7*349*_b_h)+(_g_d/7*349*_g_h)+(_d_d/7*349*_d_h)
         # Format scenario label: "B:7D/24H G:7D/24H D:7D/24H | BLOSS"
-        _label=(f"B:{int(_b_d)}D/{int(_b_h)}H · G:{int(_g_d)}D/{int(_g_h)}H · D:{int(_d_d)}D/{int(_d_h)}H"
-                +(f" | {_bmode}" if _bmode else "")
-                +(f" | G+{_growth}%" if _growth not in ("0","0%","") else ""))
-        _down_b = float(str(row.get("Downtime_B",row.get("Downtime B",0))).replace(",","") or 0)
-        _down_g = float(str(row.get("Downtime_G",row.get("Downtime G",0))).replace(",","") or 0)
-        _down_d = float(str(row.get("Downtime_D",row.get("Downtime D",0))).replace(",","") or 0)
-        _avail_b = float(str(row.get("Availability_B",row.get(100))).replace(",","") or 100)
-        _avail_g = float(str(row.get("Availability_G",row.get(100))).replace(",","") or 100)
-        _avail_d = float(str(row.get("Availability_D",row.get(100))).replace(",","") or 100)
+        _label=(
+            f"B:{int(_b_d)}D/{int(_b_h)}H · G:{int(_g_d)}D/{int(_g_h)}H · D:{int(_d_d)}D/{int(_d_h)}H"
+            +(f" | {_bmode}" if _bmode else "")
+            +(f" | G+{_growth}%" if _growth not in ("0","0%","") else "")
+        )
+
+        
+        def _safe_float(value, default=0):
+            try:
+                if value is None:
+                    return float(default)
+                value = str(value).replace("%", "").replace(",", ".").strip()
+                if value == "" or value.lower() in ["none", "nan", "null"]:
+                    return float(default)
+                return float(value)
+            except Exception:
+                return float(default)
+
+        _down_b = _safe_float(row.get("Downtime_B", row.get("Line_B_Downtime_Days_Month", row.get("Line B Downtime Days/Month", 0))), 0)
+        _down_g = _safe_float(row.get("Downtime_G", row.get("Line_G_Downtime_Days_Month", row.get("Line G Downtime Days/Month", 0))), 0)
+        _down_d = _safe_float(row.get("Downtime_D", row.get("Line_D_Downtime_Days_Month", row.get("Line D Downtime Days/Month", 0))), 0)
+
+        _avail_b = _safe_float(row.get("Availability_B", 100), 100)
+        _avail_g = _safe_float(row.get("Availability_G", 100), 100)
+        _avail_d = _safe_float(row.get("Availability_D", 100), 100)
         _tons_b = _s(row,"Tons_B"); _tons_g = _s(row,"Tons_G"); _tons_d = _s(row,"Tons_D")
         _tgt_ton = max(_s(row,"Target_Demand_Ton"),1)
         results.append({
