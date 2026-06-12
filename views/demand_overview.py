@@ -286,11 +286,12 @@ def _tab_forecasting():
         seg_ct  = sc_df["segment"].value_counts() if "segment" in sc_df.columns else {}
         st.markdown(
             f'<div class="note-box">'
-            f'Referensi klasifikasi SKU (Ubay): <b>{n_class} SKU</b> tersegmentasi — '
-            f'{seg_ct.get("SMOOTH",0)} Smooth, {seg_ct.get("ERRATIC",0)} Erratic (→ Prophet) | '
-            f'{seg_ct.get("INTERMITTENT",0)} Intermittent (→ CrostonSBA), {seg_ct.get("LUMPY",0)} Lumpy (→ CrostonSBA). '
-            f'Cutoff aktual: <b>{CUTOFF_DATE.strftime("%b %Y")}</b>. '
-            f'Periode forecast: <b>{CUTOFF_DATE.strftime("%b %Y")} – {(CUTOFF_DATE + pd.DateOffset(months=12)).strftime("%b %Y")}</b>.'
+            f'Metode forecast disesuaikan dengan pola permintaan SKU. '
+            f'SKU berpola smooth dan erratic diproses menggunakan Prophet, '
+            f'sedangkan SKU berpola intermittent dan lumpy diproses menggunakan CrostonSBA. '
+            f'Cutoff data aktual: <b>{CUTOFF_DATE.strftime("%b %Y")}</b>. '
+            f'Periode forecast: <b>{CUTOFF_DATE.strftime("%b %Y")} – '
+            f'{(CUTOFF_DATE + pd.DateOffset(months=12)).strftime("%b %Y")}</b>.'
             f'</div>',
             unsafe_allow_html=True,
         )
