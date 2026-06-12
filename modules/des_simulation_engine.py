@@ -488,8 +488,7 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
                        holiday_cutoff_days=16, holiday_dates_text="", max_scenarios=DEFAULT_MAX_SCENARIOS,
                        b_downtime=0, g_downtime=0, d_downtime=0,
                        # Backward-compat: availability params diterima tapi diabaikan
-                       b_availability=100, g_availability=100, d_availability=100,
-                       progress_callback=None):
+                       b_availability=100, g_availability=100, d_availability=100):
     """
     Jalankan DES simulation untuk semua skenario.
     Menggunakan parallel execution (joblib) untuk percepatan signifikan.
@@ -506,26 +505,24 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
     args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
 
     # ── Parallel execution ────────────────────────────────────────────────────
-    # Streamlit Cloud lebih stabil jika DES dijalankan sequential dengan progress update.
-    # Parallel loky/n_jobs=-1 dapat menyebabkan memory spike dan websocket disconnect.
-    parallel_results = []
-    total_scenarios = len(scenario_list)
-                           
-    for i, sc in enumerate(scenario_list, start=1):
-        result = simulate_one_scenario(
-            forecast_df,
-            pd.Series(sc),
-            holiday_set,
-            DEFAULT_CANDIDATE_WINDOW,
+    # Gunakan joblib dengan backend loky (works on Windows + Linux).
+    # n_jobs=-1 = semua CPU core tersedia. Fallback ke sequential jika gagal.
+    try:
+        from joblib import Parallel, delayed
+
+        def _run(args):
+            _fdf, _sc, _hs = args
+            return simulate_one_scenario(_fdf, pd.Series(_sc), _hs, DEFAULT_CANDIDATE_WINDOW)
+
+        parallel_results = Parallel(n_jobs=-1, backend="loky", verbose=0)(
+            delayed(_run)(args) for args in args_list
         )
-        parallel_results.append(result)
-    
-        if progress_callback is not None:
-            try:
-                progress_callback(i, total_scenarios, sc.get("Scenario", f"Skenario {i}"))
-            except Exception:
-                pass
-                         
+    except Exception:
+        # Fallback: sequential (aman untuk semua platform)
+        parallel_results = [
+            simulate_one_scenario(forecast_df, pd.Series(sc), holiday_set, DEFAULT_CANDIDATE_WINDOW)
+            for sc in scenario_list
+        ]
 
     results, all_planned = [], []
     for result, planned in parallel_results:
