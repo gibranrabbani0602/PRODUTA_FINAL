@@ -168,6 +168,18 @@ def render():
             if any(len(x) == 0 for x in [b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options]):
                 st.error("Pilih minimal satu opsi pada setiap parameter.")
                 st.stop()
+
+            progress_bar = st.progress(0, text="Menyiapkan simulasi DES...")
+            progress_text = st.empty()
+            
+            def _des_progress(done, total, scenario_name):
+                pct = done / total if total else 0
+                progress_bar.progress(
+                    pct,
+                    text=f"Menjalankan skenario {done}/{total}: {scenario_name}"
+                )
+                progress_text.caption(f"Progress DES: {done}/{total} skenario selesai.")
+           
             with st.spinner("Menjalankan DES simulation..."):
                 result_df, scenario_df, planned_jobs_df, input_df, meta = run_des_simulation(
                     forecast_input,
@@ -177,8 +189,13 @@ def render():
                     holiday_dates_text=holiday_dates,
                     max_scenarios=int(max_scenarios),
                     b_downtime=b_down, g_downtime=g_down, d_downtime=d_down,
+                    progress_callback=_des_progress,
                 )
                 excel_bytes, excel_name = export_to_excel_bytes(result_df, scenario_df, planned_jobs_df, input_df, "Simulasi DES Capacity")
+
+            progress_bar.progress(1.0, text="DES simulation selesai.")
+            progress_text.caption("Semua skenario selesai diproses.")
+            
             set_state("simulation_result", result_df)
             set_state("scenario_config", scenario_df)
             set_state("planned_jobs", planned_jobs_df)
