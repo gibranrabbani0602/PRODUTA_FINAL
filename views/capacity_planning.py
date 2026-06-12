@@ -94,22 +94,34 @@ def render():
         def _valid_sim(df):
             if not isinstance(df, pd.DataFrame) or df.empty:
                 return False
-            # Harus punya minimal 1 kolom utilisasi dengan nilai non-zero
-            for col in ["Util_Filling_B","Util_Filling_G","Util_Filling_D"]:
-                if col in df.columns and (df[col] > 0).any():
+            try:
+                from modules.data_loader import _normalize_sim_columns as _ncols
+                df = _ncols(df.copy())
+            except Exception:
+                df = df.copy()
+        
+            for col in ["Util_Filling_B", "Util_Filling_G", "Util_Filling_D"]:
+                if col in df.columns and (pd.to_numeric(df[col], errors="coerce").fillna(0) > 0).any():
                     return True
             return False
-
+        
+        def _norm_sim(df):
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return pd.DataFrame()
+            try:
+                from modules.data_loader import _normalize_sim_columns as _ncols
+                return _ncols(df.copy())
+            except Exception:
+                return df.copy()
+        
         if _valid_sim(_new_file):
-            set_state("simulation_result", _new_file)
-        elif not _valid_sim(_new_file):
-            # Cek apakah session state punya data valid
+            set_state("simulation_result", _norm_sim(_new_file))
+        else:
             _ses = get_state("simulation_result")
             if _valid_sim(_ses):
                 st.caption(f"Data aktif: {len(_ses)} skenario dari sesi ini.")
             else:
-                # Clear invalid cached data
-                set_state("simulation_result", pd.DataFrame())
+                st.caption("Belum ada hasil simulasi aktif.")
 
         if st.button("Hapus Cache Simulasi", key="clear_des_cp",
                      help="Kosongkan data simulasi yang tersimpan"):
