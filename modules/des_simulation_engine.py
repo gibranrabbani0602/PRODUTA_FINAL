@@ -488,7 +488,7 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
                        holiday_cutoff_days=16, holiday_dates_text="", max_scenarios=DEFAULT_MAX_SCENARIOS,
                        b_downtime=0, g_downtime=0, d_downtime=0,
                        # Backward-compat: availability params diterima tapi diabaikan
-                       b_availability=100, g_availability=100, d_availability=100
+                       b_availability=100, g_availability=100, d_availability=100,
                        progress_callback=None):
     """
     Jalankan DES simulation untuk semua skenario.
