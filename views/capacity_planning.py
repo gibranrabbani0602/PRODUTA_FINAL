@@ -598,9 +598,64 @@ def render():
             )
             st.plotly_chart(fig_ton, use_container_width=True)
 
+        # ── Export & kirim ke Alokasi Produksi untuk skenario MAINTAIN ─────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>EXPORT KAPASITAS</div>", unsafe_allow_html=True)
+
+        import io as _io_exp
+        import re as _re_exp
+
+        _maintain_data = {
+            "Scenario": str(sel_mrow.get("Scenario", sel_mrow.get("Label", "MAINTAIN"))),
+
+            "B_Days": int(sel_mrow.get("Hari B", 7)),
+            "B_Hours": int(sel_mrow.get("Jam B", 24)),
+            "G_Days": int(sel_mrow.get("Hari G", 7)),
+            "G_Hours": int(sel_mrow.get("Jam G", 24)),
+            "D_Days": int(sel_mrow.get("Hari D", 7)),
+            "D_Hours": int(sel_mrow.get("Jam D", 24)),
+
+            "Batch_Mode": str(sel_mrow.get("Batch Mode", "")),
+            "Growth": str(sel_mrow.get("Growth", "0")),
+
+            "Tons_B": float(sel_mrow.get("Tons B (ton)", sel_mrow.get("Tons B", 0))),
+            "Util_B": float(sel_mrow.get("Util B (%)", sel_mrow.get("Util B", 0))),
+            "Line_B_Type": "SSS+BIB",
+            "Line_B_Config": "single",
+
+            "Tons_G": float(sel_mrow.get("Tons G (ton)", sel_mrow.get("Tons G", 0))),
+            "Util_G": float(sel_mrow.get("Util G (%)", sel_mrow.get("Util G", 0))),
+            "Line_G_Type": "SSS+BIB",
+            "Line_G_Config": "single",
+
+            "Tons_D": float(sel_mrow.get("Tons D (ton)", sel_mrow.get("Tons D", 0))),
+            "Util_D": float(sel_mrow.get("Util D (%)", sel_mrow.get("Util D", 0))),
+            "Line_D_Type": "SSS",
+            "Line_D_Config": "multiline",
+        }
+
+        _cap_df = pd.DataFrame([_maintain_data])
+        _csv_text = _cap_df.to_csv(index=False)
+        _safe_name = _re_exp.sub(r"[^A-Za-z0-9_-]+", "_", _maintain_data["Scenario"])[:80]
+        _file_name = f"kapasitas_{_safe_name}_maintain.csv"
+
+        # Simpan ke session agar otomatis terbaca di menu Alokasi Produksi
+        set_("_cap_bytes", _csv_text.encode("utf-8"))
+        set_("_cap_name", _file_name)
+
+        st.success("Data kapasitas siap digunakan di menu Alokasi Produksi.")
+        st.download_button(
+            "⬇ Export Kapasitas",
+            data=_csv_text,
+            file_name=_file_name,
+            mime="text/csv",
+            help="Download data kapasitas untuk digunakan di menu Alokasi Produksi.",
+            key="dl_capacity_maintain",
+        )
+
         if n_mod == 0:
             st.stop()   # semua MAINTAIN: tidak ada DIAGNOSA yang perlu ditampilkan
-
+        
     # ═══ SECTION 2: DIAGNOSA & OPSI ══════════════════════════════════════════════
     st.markdown('<div class="section-title">Diagnosa Bottleneck & Rekomendasi</div>',unsafe_allow_html=True)
 
@@ -938,12 +993,23 @@ def render():
             "Line_C_Type": "SSS+BIB",
             "Line_C_Config": "single"
         })
+    
     _csv_buf = _io_exp.StringIO()
     pd.DataFrame([_post_data]).to_csv(_csv_buf, index=False)
+
+    _file_name = f"kapasitas_{sel_id}_{sel_opt_id}.csv"
+    _csv_text = _csv_buf.getvalue()
+
+    # Simpan ke session agar otomatis terbaca di menu Alokasi Produksi
+    set_("_cap_bytes", _csv_text.encode("utf-8"))
+    set_("_cap_name", _file_name)
+
+    st.success("Data kapasitas post-rekomendasi siap digunakan di menu Alokasi Produksi.")
+
     st.download_button(
         "⬇ Export Kapasitas",
-        data=_csv_buf.getvalue(),
-        file_name=f"kapasitas_{sel_id}_{sel_opt_id}.csv",
+        data=_csv_text,
+        file_name=_file_name,
         mime="text/csv",
         help="Download data kapasitas post-rekomendasi untuk digunakan di Perencanaan Produksi."
     )
