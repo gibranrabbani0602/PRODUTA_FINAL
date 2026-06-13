@@ -33,7 +33,9 @@ def _summary_cards(result_df, meta):
         return
     best = result_df.iloc[0]
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Best Scenario", str(best["Scenario"])[:38])
+    
+    scenario_label = best.get("Scenario", best.get("Scenario_ID", best.get("Label", "-")))
+    c1.metric("Best Scenario", str(scenario_label)[:38])    
     c2.metric("Tons Finished", f"{best['Tons Finished']:,.2f}")
     c3.metric("Unmet Demand", f"{best['Unmet Demand Ton']:,.2f}")
     c4.metric("Finished Ratio", f"{best['Finished Ratio (%)']:,.2f}%")
