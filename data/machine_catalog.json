@@ -1,0 +1,558 @@
+{
+  "machines": {
+    "filler_multilane_sss": {
+      "name": "FILLER",
+      "full_name": "Filler Sachet Multijalur",
+      "capex": 4200000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 260000,
+      "capacity_kg_hr": 350,
+      "capacity_ton_month": 256,
+      "format_compat": [
+        "SSS"
+      ],
+      "role": "Filling",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "multiline_lanes": 6,
+      "image": ""
+    },
+    "filler_stickpack": {
+      "name": "FILLER",
+      "full_name": "Filler Stickpack Multijalur",
+      "capex": 3800000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 220000,
+      "capacity_kg_hr": 120,
+      "capacity_ton_month": 88,
+      "format_compat": [
+        "STICKPACK"
+      ],
+      "role": "Filling",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "multiline_lanes": 8,
+      "image": ""
+    },
+    "filler_vertikal_uni": {
+      "name": "FILLER",
+      "full_name": "Filler Universal Menengah",
+      "capex": 4500000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 180000,
+      "capacity_kg_hr": 220,
+      "capacity_ton_month": 161,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Filling",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "multiline_lanes": 4,
+      "image": ""
+    },
+    "filler_sss_kompak": {
+      "name": "FILLER",
+      "full_name": "Filler Sachet Kompak",
+      "capex": 2000000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 280000,
+      "capacity_kg_hr": 110,
+      "capacity_ton_month": 80,
+      "format_compat": [
+        "SSS"
+      ],
+      "role": "Filling",
+      "note": "Data referensi internal",
+      "multiline_lanes": 6,
+      "image": ""
+    },
+    "filler_sss_standar": {
+      "name": "FILLER",
+      "full_name": "Filler Sachet Standar",
+      "capex": 3500000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 260000,
+      "capacity_kg_hr": 200,
+      "capacity_ton_month": 146,
+      "format_compat": [
+        "SSS"
+      ],
+      "role": "Filling",
+      "note": "Data referensi internal",
+      "multiline_lanes": 6,
+      "image": ""
+    },
+    "filler_uni_kompak": {
+      "name": "FILLER",
+      "full_name": "Filler Universal Kompak",
+      "capex": 3500000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 200000,
+      "capacity_kg_hr": 137,
+      "capacity_ton_month": 100,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Filling",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "multiline_lanes": 4,
+      "image": ""
+    },
+    "filler_uni_standar": {
+      "name": "FILLER",
+      "full_name": "Filler Universal Standar",
+      "capex": 5500000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 190000,
+      "capacity_kg_hr": 274,
+      "capacity_ton_month": 200,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Filling",
+      "note": "Data referensi internal",
+      "multiline_lanes": 4,
+      "image": ""
+    },
+    "filler_uni_besar": {
+      "name": "FILLER",
+      "full_name": "Filler Universal Besar",
+      "capex": 7000000000,
+      "opex_rate": 0.09,
+      "opex_per_ton": 180000,
+      "capacity_kg_hr": 411,
+      "capacity_ton_month": 300,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Filling",
+      "note": "Data referensi internal",
+      "multiline_lanes": 4,
+      "image": ""
+    },
+    "auger_dosing": {
+      "name": "DOSING",
+      "full_name": "Unit Dosing Auger",
+      "capex": 650000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 60000,
+      "capacity_kg_hr": 250,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Dosing",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "micro_auger": {
+      "name": "DOSING",
+      "full_name": "Unit Dosing Mikro",
+      "capex": 280000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 40000,
+      "capacity_kg_hr": 80,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "STICKPACK"
+      ],
+      "role": "Dosing",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "feeder_screw": {
+      "name": "FEEDER",
+      "full_name": "Screw Feeder",
+      "capex": 350000000,
+      "opex_rate": 0.05,
+      "opex_per_ton": 30000,
+      "capacity_kg_hr": 400,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Feeding",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "conveyor_z": {
+      "name": "CONVEYOR",
+      "full_name": "Konveyor Inklinasi",
+      "capex": 200000000,
+      "opex_rate": 0.05,
+      "opex_per_ton": 15000,
+      "capacity_kg_hr": 500,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Transfer",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "conveyor_belt": {
+      "name": "CONVEYOR",
+      "full_name": "Konveyor Sabuk",
+      "capex": 150000000,
+      "opex_rate": 0.05,
+      "opex_per_ton": 10000,
+      "capacity_kg_hr": 600,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Transfer",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "conveyor_multistrand": {
+      "name": "CONVEYOR",
+      "full_name": "Konveyor Multijalur",
+      "capex": 400000000,
+      "opex_rate": 0.05,
+      "opex_per_ton": 18000,
+      "capacity_kg_hr": 500,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS"
+      ],
+      "role": "Transfer",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "checkweigher": {
+      "name": "INSPEKSI",
+      "full_name": "Checkweigher",
+      "capex": 450000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 55000,
+      "capacity_kg_hr": 300,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Inspeksi",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "xray": {
+      "name": "INSPEKSI",
+      "full_name": "Detektor X-Ray",
+      "capex": 1200000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 85000,
+      "capacity_kg_hr": 250,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Inspeksi",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "discharging_unit": {
+      "name": "DISCHARGING",
+      "full_name": "Unit Discharging",
+      "capex": 900000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 25000,
+      "capacity_kg_hr": 500,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Discharging",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "infeed_screw": {
+      "name": "INFEED",
+      "full_name": "Infeed Screw",
+      "capex": 400000000,
+      "opex_rate": 0.05,
+      "opex_per_ton": 20000,
+      "capacity_kg_hr": 450,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Feeding",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "folding_unit": {
+      "name": "FOLDING",
+      "full_name": "Unit Folding",
+      "capex": 700000000,
+      "opex_rate": 0.06,
+      "opex_per_ton": 30000,
+      "capacity_kg_hr": 400,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB"
+      ],
+      "role": "Folding",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    },
+    "packing_machine": {
+      "name": "PACKING",
+      "full_name": "Mesin Packing",
+      "capex": 1600000000,
+      "opex_rate": 0.07,
+      "opex_per_ton": 45000,
+      "capacity_kg_hr": 400,
+      "capacity_ton_month": 0,
+      "format_compat": [
+        "SSS",
+        "BIB",
+        "STICKPACK"
+      ],
+      "role": "Packing",
+      "note": "Estimasi pasar industri - verifikasi ke pemasok",
+      "image": ""
+    }
+  },
+  "global_params": {
+    "discount_rate": 0.13,
+    "project_lifetime_year": 5,
+    "payback_threshold_year": 3,
+    "minimum_npv": 0,
+    "minimum_irr": 0.15,
+    "minimum_roi": 0.25,
+    "realization_factor": 0.75,
+    "internal_value_per_ton": 2100000,
+    "maklon_cost_per_ton": 6500000,
+    "internal_cost_per_ton": 5000000,
+    "tax_rate": 0.25,
+    "useful_life_year": 5,
+    "maintenance_annual": 240000000,
+    "inflation_rate": 0.03,
+    "maintenance_capex_pct": 0.008
+  },
+  "capex_overhead": {
+    "Instalasi": 0.08,
+    "Elektrikal": 0.05,
+    "Utilitas": 0.03,
+    "Sparepart Awal": 0.02
+  },
+  "opex_manpower": {
+    "operator_annual": 83200000,
+    "qc_annual": 83200000,
+    "maintenance_annual": 240000000
+  },
+  "intervention_packages": {
+    "replace_filler": {
+      "name": "Penggantian Unit Filler",
+      "applies_to": [
+        "Single line",
+        "Multiline",
+        "Stickpack"
+      ],
+      "components_extra": [],
+      "mode": "replace"
+    },
+    "convert_multiline": {
+      "name": "Konversi Lini Multijalur",
+      "applies_to": [
+        "Single line"
+      ],
+      "components_extra": [
+        {
+          "key": "micro_auger",
+          "qty": 6
+        },
+        {
+          "key": "conveyor_z",
+          "qty": 6
+        },
+        {
+          "key": "conveyor_multistrand",
+          "qty": 1
+        }
+      ],
+      "mode": "multilane"
+    },
+    "new_line": {
+      "name": "Penambahan Lini Produksi Baru",
+      "applies_to": [
+        "Single line",
+        "Multiline",
+        "Stickpack"
+      ],
+      "components_extra": [
+        {
+          "key": "discharging_unit",
+          "qty": 1
+        },
+        {
+          "key": "infeed_screw",
+          "qty": 1
+        },
+        {
+          "key": "conveyor_z",
+          "qty": 1
+        },
+        {
+          "key": "folding_unit",
+          "qty": 1
+        },
+        {
+          "key": "checkweigher",
+          "qty": 1
+        },
+        {
+          "key": "xray",
+          "qty": 1
+        },
+        {
+          "key": "packing_machine",
+          "qty": 1
+        }
+      ],
+      "mode": "new_line"
+    }
+  },
+  "capex_fixed": {
+    "Komisioning": 35000000,
+    "Training": 15000000
+  },
+  "machine_categories": [
+    "Discharging",
+    "Feeding",
+    "Dosing",
+    "Filling",
+    "Transfer",
+    "Folding",
+    "Inspeksi",
+    "Packing"
+  ],
+  "package_formats": [
+    "SSS",
+    "BIB",
+    "STICKPACK"
+  ],
+  "line_types": [
+    "Single line",
+    "Multiline",
+    "Stickpack"
+  ],
+  "line_blueprints": {
+    "Single line": [
+      "Discharging",
+      "Feeding",
+      "Dosing",
+      "Filling",
+      "Transfer",
+      "Inspeksi",
+      "Packing"
+    ],
+    "Multiline": [
+      "Discharging",
+      "Feeding",
+      "Dosing",
+      "Filling",
+      "Transfer",
+      "Inspeksi",
+      "Packing"
+    ],
+    "Stickpack": [
+      "Feeding",
+      "Dosing",
+      "Filling",
+      "Transfer",
+      "Inspeksi",
+      "Packing"
+    ]
+  },
+  "capex_overhead_items": [
+    {
+      "label": "Instalasi",
+      "pct": 0.08,
+      "applies": [
+        "all"
+      ]
+    },
+    {
+      "label": "Elektrikal",
+      "pct": 0.05,
+      "applies": [
+        "all"
+      ]
+    },
+    {
+      "label": "Utilitas",
+      "pct": 0.03,
+      "applies": [
+        "all"
+      ]
+    },
+    {
+      "label": "Sparepart Awal",
+      "pct": 0.02,
+      "applies": [
+        "all"
+      ]
+    }
+  ],
+  "capex_fixed_items": [
+    {
+      "label": "Komisioning",
+      "amount": 35000000,
+      "applies": [
+        "all"
+      ]
+    },
+    {
+      "label": "Training",
+      "amount": 15000000,
+      "applies": [
+        "all"
+      ]
+    }
+  ],
+  "opex_items": [
+    {
+      "label": "Maintenance Lini",
+      "annual": 240000000,
+      "applies": [
+        "all"
+      ]
+    },
+    {
+      "label": "Operator",
+      "annual": 83200000,
+      "applies": [
+        "new_line"
+      ]
+    },
+    {
+      "label": "Quality Control",
+      "annual": 83200000,
+      "applies": [
+        "new_line"
+      ]
+    }
+  ],
+  "opex_umr_monthly": 5558515,
+  "custom_params": {}
+}

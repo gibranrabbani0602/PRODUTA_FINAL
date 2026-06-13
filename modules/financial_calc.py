@@ -55,6 +55,7 @@ def _load_fp_machines() -> dict:
                 "opex_per_ton":     float(d.get("BASE OPEX/TON",0) or 0),
                 "capacity_impact":  float(d.get("CAPACITY IMPACT (%)",0) or 0),
                 "capacity_kg_hr":   float(d.get("CAPACITY (kg/hr)",0) or 0),
+                "capacity_ton_month": float(d.get("CAPACITY (ton/month)", 0) or 0) or round(float(d.get("CAPACITY (kg/hr)",0) or 0) * 730 / 1000, 1),
                 "format_compat":    [f.strip() for f in fmt_compat.split("|") if f.strip()],
                 "line_compat":      [l.strip() for l in line_compat.split("|") if l.strip()],
                 "is_core":          str(d.get("IS_CORE","NO")).strip().upper() == "YES",
@@ -125,41 +126,97 @@ _fp_capex_gen = _load_fp_capex_general()
 _fp_opex_gen  = _load_fp_opex_general()
 _fp_financial = _load_fp_financial()
 
-# ── MACHINES: pakai dari xlsx jika berhasil, fallback ke hardcode ─────────────
-if _fp_machines:
+# ── MACHINES: prioritas catalog.json (hasil edit user) > xlsx > hardcode ─────
+# machine_catalog.json adalah "base" yang dapat diedit dari menu Parameter
+# Investasi — setiap perubahan di sana langsung menjadi acuan seluruh sistem.
+def _load_catalog_machines() -> dict:
+    try:
+        _cp = Path("data/machine_catalog.json")
+        if _cp.exists():
+            with open(_cp, encoding="utf-8") as _f:
+                _cat = json.load(_f)
+            _m = _cat.get("machines", {})
+            if isinstance(_m, dict) and len(_m) > 0:
+                return _m
+    except Exception:
+        pass
+    return {}
+
+_cat_machines = _load_catalog_machines()
+if _cat_machines:
+    MACHINES = _cat_machines
+elif _fp_machines:
     MACHINES = _fp_machines
 else:
     # Fallback hardcode (data Pak Ardi Juni 2026)
     MACHINES = {
+        # ── Mesin existing ──────────────────────────────────────────────────
         "shiputec_multilane": {
             "name": "FILLER PLATFORM", "full_name": "SHIPUTEC MULTI-LANE POWDER SACHET",
             "capex": 729_600_000, "opex_rate": 0.09, "opex_per_ton": 260_000,
-            "capacity_kg_hr": 350, "is_core": True,
+            "capacity_kg_hr": 350, "capacity_ton_month": 256, "is_core": True,
             "format_compat": ["SSS"], "line_compat": ["D"], "role": "Filling", "url": "",
         },
         "shiputec_stickpack": {
             "name": "FILLER PLATFORM", "full_name": "SHIPUTEC SPMP-480 MULTILANE STICKPACK",
             "capex": 620_800_000, "opex_rate": 0.09, "opex_per_ton": 220_000,
-            "capacity_kg_hr": 120, "is_core": True,
+            "capacity_kg_hr": 120, "capacity_ton_month": 88, "is_core": True,
             "format_compat": ["STICKPACK"], "line_compat": ["STICKPACK"], "role": "Filling", "url": "",
         },
         "wolf_vpc250": {
             "name": "FILLER PLATFORM", "full_name": "WOLF VPC-250 VERTICAL PACKAGING MACHINE",
             "capex": 1_410_400_000, "opex_rate": 0.09, "opex_per_ton": 180_000,
-            "capacity_kg_hr": 220, "is_core": True,
+            "capacity_kg_hr": 220, "capacity_ton_month": 161, "is_core": True,
             "format_compat": ["SSS","BIB"], "line_compat": ["B","G"], "role": "Filling", "url": "",
         },
         "checkweigher": {
             "name": "INSPECTION SYSTEM 1", "full_name": "INLINE CHECKWEIGHER WITH AIR REJECTOR",
             "capex": 48_000_000, "opex_rate": 0.06, "opex_per_ton": 55_000,
-            "capacity_kg_hr": 300, "is_core": True,
+            "capacity_kg_hr": 300, "capacity_ton_month": 0, "is_core": True,
             "format_compat": ["SSS","BIB","STICKPACK"], "line_compat": ["B","G","STICKPACK"], "role": "Inspeksi", "url": "",
         },
         "xray": {
             "name": "INSPECTION SYSTEM 2", "full_name": "XRAY FOREIGN BODY DETECTION SYSTEM",
             "capex": 185_000_000, "opex_rate": 0.06, "opex_per_ton": 85_000,
-            "capacity_kg_hr": 250, "is_core": True,
+            "capacity_kg_hr": 250, "capacity_ton_month": 0, "is_core": True,
             "format_compat": ["SSS","BIB","STICKPACK"], "line_compat": ["B","G","STICKPACK"], "role": "Inspeksi", "url": "",
+        },
+        # ── Filler SSS variatif (untuk Line D / multiline SSS) ───────────────
+        "filler_sss_small": {
+            "name": "FILLER PLATFORM", "full_name": "FILLER SSS KECIL (CHINA BRAND ~80 ton/bln)",
+            "capex": 2_000_000_000, "opex_rate": 0.09, "opex_per_ton": 280_000,
+            "capacity_kg_hr": 110, "capacity_ton_month": 80, "is_core": True,
+            "format_compat": ["SSS"], "line_compat": ["D"], "role": "Filling",
+            "url": "", "note": "Estimasi — verifikasi ke supplier sebelum keputusan investasi",
+        },
+        "filler_sss_medium": {
+            "name": "FILLER PLATFORM", "full_name": "FILLER SSS SEDANG (CHINA BRAND ~Rp 3.5B)",
+            "capex": 3_500_000_000, "opex_rate": 0.09, "opex_per_ton": 260_000,
+            "capacity_kg_hr": 200, "capacity_ton_month": 146, "is_core": True,
+            "format_compat": ["SSS"], "line_compat": ["D"], "role": "Filling",
+            "url": "", "note": "Referensi harga Pak Ardi FBMI: Filler China ~Rp 3.5B",
+        },
+        # ── Filler SSS+BIB Universal variatif (untuk Line B/G) ───────────────
+        "filler_sss_bib_small": {
+            "name": "FILLER PLATFORM", "full_name": "FILLER SSS+BIB UNIVERSAL KECIL (~100 ton/bln)",
+            "capex": 3_500_000_000, "opex_rate": 0.09, "opex_per_ton": 200_000,
+            "capacity_kg_hr": 137, "capacity_ton_month": 100, "is_core": True,
+            "format_compat": ["SSS","BIB"], "line_compat": ["B","G"], "role": "Filling",
+            "url": "", "note": "Estimasi — verifikasi ke supplier sebelum keputusan investasi",
+        },
+        "filler_sss_bib_medium": {
+            "name": "FILLER PLATFORM", "full_name": "FILLER SSS+BIB UNIVERSAL SEDANG (~200 ton/bln)",
+            "capex": 5_500_000_000, "opex_rate": 0.09, "opex_per_ton": 190_000,
+            "capacity_kg_hr": 274, "capacity_ton_month": 200, "is_core": True,
+            "format_compat": ["SSS","BIB"], "line_compat": ["B","G"], "role": "Filling",
+            "url": "", "note": "Referensi: Filler Eropa range bawah (~Rp 5B)",
+        },
+        "filler_sss_bib_large": {
+            "name": "FILLER PLATFORM", "full_name": "FILLER SSS+BIB UNIVERSAL BESAR (~300 ton/bln)",
+            "capex": 7_000_000_000, "opex_rate": 0.09, "opex_per_ton": 180_000,
+            "capacity_kg_hr": 411, "capacity_ton_month": 300, "is_core": True,
+            "format_compat": ["SSS","BIB"], "line_compat": ["B","G"], "role": "Filling",
+            "url": "", "note": "Referensi harga Pak Ardi FBMI: Filler Eropa ~Rp 5-7B",
         },
     }
 
@@ -248,22 +305,13 @@ def capex_from_catalog(cat: dict, pkg_key: str) -> dict:
 
 
 def capex_multiline(qty_lines: int = 1) -> dict:
-    """CAPEX konversi single → multiline (kompatibel dengan kode lama)."""
-    # Ambil mesin yang relevan dari catalog
-    filler_keys  = [k for k, m in MACHINES.items()
-                    if "SSS" in m.get("format_compat", []) and m.get("is_core", False)
-                    and "filler" in m.get("full_name","").lower()]
-    if not filler_keys:
-        filler_keys = [k for k, m in MACHINES.items() if "SSS" in m.get("format_compat",[])]
-    # Default: SHIPUTEC multi-lane + micro auger + conveyor
-    machines = []
-    for k in filler_keys[:1]:
-        machines.append((k, qty_lines))
-    check_keys = [k for k, m in MACHINES.items() if "CHECKWEIGHER" in m.get("full_name","").upper()]
-    xray_keys  = [k for k, m in MACHINES.items() if "XRAY" in m.get("full_name","").upper() or "X-RAY" in m.get("full_name","").upper()]
-    if check_keys: machines.append((check_keys[0], qty_lines))
-    if xray_keys:  machines.append((xray_keys[0],  qty_lines))
-
+    """CAPEX konversi single → multiline. Komponen identik dengan opsi upgrade di UI."""
+    machines = [
+        ("micro_auger",          6 * qty_lines),
+        ("filler_multilane_sss", 1 * qty_lines),
+        ("conveyor_z",           6 * qty_lines),
+        ("conveyor_multistrand", 1 * qty_lines),
+    ]
     r = _machine_capex(machines)
     r["total"]             = int(r["machine"] + r["overhead"] + r["commissioning"])
     r["annual_opex_maint"] = ANNUAL_MAINTENANCE_FBMI
@@ -274,17 +322,16 @@ def capex_multiline(qty_lines: int = 1) -> dict:
 
 
 def capex_new_line() -> dict:
-    """CAPEX penambahan 1 lini baru single-lane SSS+BIB."""
-    filler_keys = [k for k, m in MACHINES.items()
-                   if "SSS" in m.get("format_compat",[]) and "BIB" in m.get("format_compat",[])
-                   and m.get("is_core", False)]
-    machines = []
-    if filler_keys:
-        machines.append((filler_keys[0], 1))
-    check_keys = [k for k, m in MACHINES.items() if "CHECKWEIGHER" in m.get("full_name","").upper()]
-    xray_keys  = [k for k, m in MACHINES.items() if "XRAY" in m.get("full_name","").upper() or "X-RAY" in m.get("full_name","").upper()]
-    if check_keys: machines.append((check_keys[0], 1))
-    if xray_keys:  machines.append((xray_keys[0],  1))
+    """CAPEX penambahan 1 lini baru SSS+BIB. Komponen identik dengan opsi upgrade di UI."""
+    machines = [
+        ("feeder_screw",        1),
+        ("auger_dosing",        1),
+        ("filler_vertikal_uni", 1),
+        ("conveyor_z",          1),
+        ("conveyor_belt",       1),
+        ("checkweigher",        1),
+        ("xray",                1),
+    ]
     r = _machine_capex(machines)
     r["total"]             = int(r["machine"] + r["overhead"] + r["commissioning"])
     r["annual_opex_maint"] = ANNUAL_MAINTENANCE_FBMI
@@ -361,18 +408,37 @@ def compute_financial(total_capex: float,
     else:
         annual_benefit = annual_additional_ton * vpt * rf
 
+    # ── Konfigurasi cara hitung (editable di Parameter & Katalog Investasi) ──
+    cfg = params.get("calc_config", {})
+    use_tax       = bool(cfg.get("include_tax", True))
+    use_inflation = bool(cfg.get("include_inflation", True))
+    use_mcapex    = bool(cfg.get("include_maint_capex", True))
+    pb_discounted = bool(cfg.get("payback_discounted", False))
+
     # Straight-line depreciation (tax shield, add back ke FCF)
     depreciation = total_capex / ul
 
-    # Income statement
-    ebit      = annual_benefit - annual_opex_extra - depreciation
-    cash_tax  = max(ebit, 0.0) * tax_rate
+    # Maintenance capex: persen dari investasi awal per tahun (model referensi ~0.8%)
+    maint_capex_pct = float(params.get("maintenance_capex_pct", 0.0)) if use_mcapex else 0.0
+    maint_capex     = total_capex * maint_capex_pct
 
-    # FCF per tahun = EBIT + Dep - Cash Tax - Maintenance Capex (per model Pak Ardi)
-    annual_fcf = annual_benefit - annual_opex_extra - cash_tax - maint
+    # Inflasi tahunan: eskalasi biaya operasional (benefit diasumsikan ikut harga)
+    inflation = float(params.get("inflation_rate", 0.0)) if use_inflation else 0.0
 
-    # Cash flow series: t=0 outflow CAPEX, t=1..N inflow FCF
-    cash_flows = [-total_capex] + [annual_fcf] * N
+    # FCF per tahun t (1..N): biaya tereskalasi inflasi, benefit konservatif tetap
+    annual_fcf_series = []
+    for t in range(1, int(params.get("project_lifetime_year", DEFAULT_PARAMS["project_lifetime_year"])) + 1):
+        esc       = (1 + inflation) ** (t - 1)
+        opex_t    = (annual_opex_extra + maint) * esc
+        ebit_t    = annual_benefit - opex_t - depreciation
+        cash_tax  = (max(ebit_t, 0.0) * tax_rate) if use_tax else 0.0
+        fcf_t     = annual_benefit - opex_t - cash_tax - maint_capex * esc
+        annual_fcf_series.append(fcf_t)
+
+    annual_fcf = annual_fcf_series[0] if annual_fcf_series else 0.0
+
+    # Cash flow series: t=0 outflow CAPEX, t=1..N inflow FCF tereskalasi
+    cash_flows = [-total_capex] + annual_fcf_series
 
     # NPV dengan discount rate = WACC
     npv = float(npf.npv(r, cash_flows))
@@ -387,8 +453,16 @@ def compute_financial(total_capex: float,
     # ROI = FCF tahunan / CAPEX (return tahunan atas modal)
     roi_pct = (annual_fcf / total_capex * 100) if total_capex > 0 else 0
 
-    # Payback period (undiscounted, sesuai output Pak Ardi)
-    payback = (total_capex / annual_fcf) if annual_fcf > 0 else None
+    # Payback period: kumulatif terhadap FCF berseri
+    # (undiscounted default; discounted bila dikonfigurasi)
+    payback = None
+    _cum = 0.0
+    for _i, _f in enumerate(annual_fcf_series, start=1):
+        _fv = _f / ((1 + r) ** _i) if pb_discounted else _f
+        _prev = _cum; _cum += _fv
+        if _cum >= total_capex and _fv > 0:
+            payback = (_i - 1) + (total_capex - _prev) / _fv
+            break
 
     # Kelayakan
     min_irr  = params.get("minimum_irr",            DEFAULT_PARAMS["minimum_irr"])
@@ -404,8 +478,29 @@ def compute_financial(total_capex: float,
     }
     feasible = flags[f"NPV ≥ {fmt_rp(min_npv)}"] and flags[f"IRR ≥ {min_irr*100:.0f}%"]
 
+    # Breakdown langkah perhitungan — untuk transparansi di UI
+    _t1 = annual_fcf_series[0] if annual_fcf_series else 0.0
+    _ebit1 = annual_benefit - (annual_opex_extra + maint) - depreciation
+    _tax1  = (max(_ebit1, 0.0) * tax_rate) if use_tax else 0.0
+    # Label mengikuti nama parameter pada menu Parameter & Katalog Investasi
+    calc_steps = [
+        ("Manfaat Tahunan",        "Volume Bernilai × Nilai Manfaat per Ton", annual_benefit),
+        ("OPEX Tahunan",           "Jumlah seluruh item OPEX yang berlaku",        -(annual_opex_extra + maint)),
+        ("Depresiasi",             f"Total CAPEX ÷ Umur Ekonomis Aset ({ul} thn)", -depreciation),
+        ("Laba Operasional (EBIT)","Manfaat Tahunan − OPEX Tahunan − Depresiasi", _ebit1),
+        ("Pajak Kas",              f"EBIT (bila positif) × Tarif Pajak {tax_rate*100:.0f}%" + ("" if use_tax else " [nonaktif]"), -_tax1),
+        ("Maintenance CAPEX",      f"Maintenance CAPEX {maint_capex_pct*100:.1f}% × Total CAPEX" + ("" if use_mcapex else " [nonaktif]"), -maint_capex),
+        ("Arus Kas Bersih (FCF)",  "Manfaat − OPEX − Pajak Kas − Maintenance CAPEX", _t1),
+        ("Eskalasi Biaya",         f"Biaya meningkat sebesar Inflasi Tahunan {inflation*100:.1f}% per tahun" + ("" if use_inflation else " [nonaktif]"), None),
+        ("NPV",                    f"Σ FCF tahun-t ÷ (1 + WACC {r*100:.0f}%)^t − Total CAPEX, selama Umur Proyek {N} thn", npv),
+        ("IRR",                    "Tingkat diskonto yang menjadikan NPV = 0", (irr_pct or 0)/100),
+        ("ROI per Tahun",          "Arus Kas Bersih Tahunan ÷ Total CAPEX", roi_pct/100),
+        ("Payback Period",         ("Tahun tercapainya akumulasi FCF terdiskonto = Total CAPEX" if pb_discounted else "Tahun tercapainya akumulasi FCF = Total CAPEX"), payback),
+    ]
+
     return {
         "npv":                  npv,
+        "calc_steps":           calc_steps,
         "irr_pct":              irr_pct,
         "roi_pct":              roi_pct,
         "payback_year":         payback,
@@ -413,8 +508,8 @@ def compute_financial(total_capex: float,
         "annual_fcf":           annual_fcf,
         "annual_opex_extra":    annual_opex_extra,
         "depreciation":         depreciation,
-        "ebit":                 ebit,
-        "cash_tax":             cash_tax,
+        "ebit":                 (annual_fcf_series and (annual_benefit - (annual_opex_extra + maint) - depreciation)) or 0,
+        "cash_tax":             max(annual_benefit - (annual_opex_extra + maint) - depreciation, 0.0) * tax_rate,
         "annual_maint_capex":   maint,
         "cash_flows":           cash_flows,
         "flags":                flags,

@@ -1,428 +1,627 @@
+"""
+Parameter & Katalog Investasi — sumber kebenaran tunggal seluruh sistem.
+Semua master data (kategori, format, tipe lini, alur, paket, CAPEX, OPEX,
+parameter) dikelola di sini dan dirujuk oleh menu lain. Tidak ada hardcode.
+"""
+import json
 import streamlit as st
 import pandas as pd
-import numpy as np
-import json
 from pathlib import Path
-import plotly.graph_objects as go
-from modules.session import get, set_
+from modules.financial_calc import DEFAULT_PARAMS, fmt_rp
+
+CATALOG_PATH = Path("data/machine_catalog.json")
+ASSETS_DIR   = Path("assets/machines")
+
+
+def _load_catalog():
+    if CATALOG_PATH.exists():
+        try:
+            with open(CATALOG_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_catalog(cat):
+    CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CATALOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cat, f, indent=2, ensure_ascii=True)
 
 
 def render():
-    from modules.financial_calc import (
-        MACHINES as _DEFAULT_MACHINES, DEFAULT_PARAMS, OVERHEAD, OVERHEAD_TOTAL,
-        ANNUAL_OPERATOR, ANNUAL_QC, ANNUAL_MAINTENANCE_FBMI, fmt_rp,
-        compute_financial, _load_fp_machines, _load_fp_capex_general,
-        _load_fp_opex_general, _load_fp_financial,
-    )
+    st.markdown('<div class="page-title">PARAMETER & KATALOG INVESTASI</div>',
+                unsafe_allow_html=True)
+    st.caption("Pusat konfigurasi: mesin, paket intervensi, biaya, dan parameter "
+               "finansial. Seluruh menu lain merujuk pada pengaturan di sini.")
 
-    CATALOG_PATH = Path("data/machine_catalog.json")
-    FP_PATH      = Path("data/Financial_Param.xlsx")
+    cat = _load_catalog()
+    if not cat:
+        st.error("Katalog tidak ditemukan."); return
 
-    def load_catalog():
-        if CATALOG_PATH.exists():
-            with open(CATALOG_PATH) as f:
-                cat = json.load(f)
-            # Pastikan key yang dibutuhkan ada
-            cat.setdefault("machines",      {k: dict(v) for k, v in _DEFAULT_MACHINES.items()})
-            cat.setdefault("packages",      _default_packages())
-            cat.setdefault("global_params", {k: v for k, v in DEFAULT_PARAMS.items()})
-            cat.setdefault("capex_overhead", OVERHEAD)
-            cat.setdefault("opex_manpower",  {
-                "operator_annual": ANNUAL_OPERATOR,
-                "qc_annual":       ANNUAL_QC,
-                "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
-            })
-            return cat
-        return _build_default_catalog()
+    machines   = cat.setdefault("machines", {})
+    categories = cat.setdefault("machine_categories",
+        ["Discharging","Feeding","Dosing","Filling","Transfer","Folding","Inspeksi","Packing"])
+    formats    = cat.setdefault("package_formats", ["SSS","BIB","STICKPACK"])
+    line_types = cat.setdefault("line_types", ["Single line","Multiline","Stickpack"])
+    iv_pkgs    = cat.setdefault("intervention_packages", {})
+    _pkg_opts  = ["all"] + list(iv_pkgs.keys())
+    _pkg_lbl   = {"all": "Semua paket", **{k: v.get("name", k) for k, v in iv_pkgs.items()}}
 
-    def _default_packages():
-        return {
-            "multiline_upgrade": {
-                "name": "Upgrade SSS/BIB → Multiline",
-                "components": [],
-                "overhead_pct": OVERHEAD_TOTAL,
-                "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
-                "note": "Konversi lini existing ke multiline (CAPEX target ~Rp 11.9B, Pak Ardi FBMI)",
-            },
-            "stickpack_new_line": {
-                "name": "Penambahan Lini Stickpack",
-                "components": [],
-                "overhead_pct": OVERHEAD_TOTAL,
-                "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
-                "note": "Lini stickpack baru (format 15g)",
-            },
-        }
+    tab_mesin, tab_paket, tab_capex, tab_opex, tab_param = st.tabs(
+        ["Katalog Mesin", "Paket Investasi", "CAPEX", "OPEX", "Parameter Finansial"])
 
-    def _build_default_catalog():
-        return {
-            "machines":       {k: dict(v) for k, v in _DEFAULT_MACHINES.items()},
-            "packages":       _default_packages(),
-            "global_params":  {k: v for k, v in DEFAULT_PARAMS.items()},
-            "capex_overhead": OVERHEAD,
-            "opex_manpower": {
-                "operator_annual":    ANNUAL_OPERATOR,
-                "qc_annual":          ANNUAL_QC,
-                "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
-            },
-        }
-
-    def save_catalog(cat):
-        CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(CATALOG_PATH, "w") as f:
-            json.dump(cat, f, indent=2, ensure_ascii=False)
-
-    # ── Halaman ────────────────────────────────────────────────────────────────
-    st.markdown('<div class="page-title">PARAMETER INVESTASI</div>', unsafe_allow_html=True)
-    st.caption("Kelola referensi teknis dan parameter finansial yang digunakan di seluruh analisis investasi.")
-
-    if not FP_PATH.exists():
-        st.caption("Parameter finansial menggunakan nilai default. Perubahan di sini disimpan secara lokal.")
-
-    cat      = load_catalog()
-    machines = cat["machines"]
-
-    tab_mesin, tab_paket, tab_capex, tab_opex, tab_param = st.tabs([
-        "Katalog Mesin",
-        "Paket Investasi",
-        "Overhead CAPEX",
-        "OPEX & Manpower",
-        "Parameter Finansial",
-    ])
-
-    # ─── TAB 1: KATALOG MESIN ────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 1 — KATALOG MESIN
+    # ════════════════════════════════════════════════════════════════════════
     with tab_mesin:
         st.markdown("**KATALOG MESIN**")
         st.caption("Spesifikasi dan harga referensi komponen mesin.")
 
-        # Filter per role
-        all_roles = sorted({m.get("role", m.get("name","?")) for m in machines.values()})
-        sel_role  = st.selectbox("Filter Komponen", ["Semua"] + all_roles, key="mesin_role")
+        with st.expander("Kelola Kategori & Format"):
+            mc1, mc2 = st.columns(2)
+            st.caption("Dua daftar ini berdiri sendiri: kategori mengelompokkan "
+                       "fungsi mesin, format mendaftarkan jenis kemasan yang dikenal sistem.")
+            with mc1:
+                st.markdown("**Kategori Mesin**")
+                st.caption(", ".join(categories))
+                _nc1, _nc2 = st.columns([3,1])
+                with _nc1:
+                    _new_cat = st.text_input("Kategori baru", key="new_cat",
+                                             label_visibility="collapsed",
+                                             placeholder="Nama kategori baru")
+                with _nc2:
+                    if st.button("Tambah", key="add_cat") and _new_cat.strip():
+                        if _new_cat.strip() not in categories:
+                            categories.append(_new_cat.strip())
+                            save_catalog(cat); st.rerun()
+            with mc2:
+                st.markdown("**Format Kemasan**")
+                st.caption(", ".join(formats))
+                _nf1, _nf2 = st.columns([3,1])
+                with _nf1:
+                    _new_fmt = st.text_input("Format baru", key="new_fmt",
+                                             label_visibility="collapsed",
+                                             placeholder="Nama format baru")
+                with _nf2:
+                    if st.button("Tambah", key="add_fmt") and _new_fmt.strip():
+                        _f = _new_fmt.strip().upper()
+                        if _f not in formats:
+                            formats.append(_f)
+                            save_catalog(cat); st.rerun()
+
+        fc1, fc2 = st.columns([3, 2])
+        with fc1:
+            _q = st.text_input("Cari mesin", "", key="mesin_search",
+                               placeholder="Ketik nama mesin...")
+        with fc2:
+            sel_role = st.selectbox("Kategori", ["Semua"] + categories, key="mesin_role")
+
+        _filtered = []
+        for key, m in machines.items():
+            if sel_role != "Semua" and m.get("role") != sel_role: continue
+            if _q and _q.lower() not in m.get("full_name","").lower(): continue
+            _filtered.append((key, m))
+        _filtered.sort(key=lambda x: (x[1].get("role",""), x[1].get("full_name","")))
+        st.caption(f"{len(_filtered)} dari {len(machines)} mesin ditampilkan.")
 
         _to_delete = None
-        for key, m in machines.items():
-            role = m.get("role", m.get("name","?"))
-            if sel_role != "Semua" and role != sel_role:
-                continue
-            with st.expander(f"**{m.get('full_name', key)}** — {fmt_rp(m.get('capex',0))} | {m.get('capacity_kg_hr',0):.0f} kg/hr", expanded=False):
-                c1, c2, c3 = st.columns([3, 2, 1])
-                with c1:
-                    m["full_name"]   = st.text_input("Nama Mesin",      m.get("full_name",""),  key=f"mfn_{key}")
-                    m["role"]        = st.text_input("Komponen/Fungsi", m.get("role",""),        key=f"mr_{key}")
-                    fmts = st.text_input("Format (pisah |)",
-                        "|".join(m.get("format_compat",[])), key=f"mfmt_{key}",
-                        help="Contoh: SSS|BIB atau STICKPACK")
-                    m["format_compat"] = [x.strip() for x in fmts.split("|") if x.strip()]
-                with c2:
-                    m["capex"]        = st.number_input("CAPEX (Rp)", 0, 50_000_000_000,
-                        int(m.get("capex",0)), 10_000_000, format="%d", key=f"mc_{key}")
-                    m["opex_per_ton"] = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000,
-                        int(m.get("opex_per_ton",0)), 5_000, format="%d", key=f"mot_{key}")
-                    m["capacity_kg_hr"] = st.number_input("Kapasitas (kg/hr)", 0.0, 5000.0,
-                        float(m.get("capacity_kg_hr",0)), 10.0, key=f"mkghr_{key}")
-                with c3:
-                    m["is_core"] = st.checkbox("Core", m.get("is_core", True), key=f"mic_{key}")
-                    m["url"]     = st.text_input("URL Ref", m.get("url",""), key=f"mu_{key}")
-                    if st.button("Hapus", key=f"del_{key}", type="secondary"):
-                        _to_delete = key
+        for i in range(0, len(_filtered), 2):
+            cols = st.columns(2)
+            for col, (key, m) in zip(cols, _filtered[i:i+2]):
+                with col:
+                    with st.container(border=True):
+                        _img_p = m.get("image","")
+                        if _img_p and Path(_img_p).exists():
+                            _ic1, _ic2 = st.columns([1, 3])
+                            with _ic1: st.image(_img_p, width=72)
+                            _info_col = _ic2
+                        else:
+                            _info_col = st.container()
+                        _cap_t = float(m.get("capacity_ton_month",0) or 0)
+                        _cap_disp = f"{_cap_t:.0f} ton/bln" if _cap_t > 0 else "&mdash;"
+                        with _info_col:
+                            st.markdown(
+                                f'<div style="font-weight:700;color:#071952;font-size:.92rem;">'
+                                f'{m.get("full_name", key)}</div>'
+                                f'<div style="font-size:.76rem;color:#8b949e;margin:2px 0 6px 0;">'
+                                f'{m.get("role","")} &nbsp;|&nbsp; {_cap_disp} &nbsp;|&nbsp; '
+                                f'{"/".join(m.get("format_compat",[])) or "-"}</div>'
+                                f'<div style="font-size:.9rem;font-weight:600;color:#088395;">'
+                                f'{fmt_rp(m.get("capex",0))}</div>',
+                                unsafe_allow_html=True)
+                        with st.expander("Edit"):
+                            e1, e2 = st.columns(2)
+                            with e1:
+                                m["full_name"] = st.text_input("Nama", m.get("full_name",""), key=f"mfn_{key}")
+                                _role_idx = categories.index(m["role"]) if m.get("role") in categories else 0
+                                m["role"] = st.selectbox("Kategori", categories,
+                                    index=_role_idx, key=f"mr_{key}")
+                                m["format_compat"] = st.multiselect("Format", formats,
+                                    default=[f for f in m.get("format_compat",[]) if f in formats],
+                                    key=f"mfmt_{key}")
+                            with e2:
+                                m["capex"] = st.number_input("CAPEX (Rp)", 0, 50_000_000_000,
+                                    int(m.get("capex",0)), 10_000_000, format="%d", key=f"mc_{key}")
+                                m["opex_per_ton"] = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000,
+                                    int(m.get("opex_per_ton",0)), 5_000, format="%d", key=f"mot_{key}")
+                                _dft = float(m.get("capacity_ton_month",0)) or round(
+                                    float(m.get("capacity_kg_hr",0)) * 730 / 1000, 1)
+                                m["capacity_ton_month"] = st.number_input(
+                                    "Kapasitas (ton/bln)", 0.0, 2000.0, float(_dft), 5.0,
+                                    key=f"mtonm_{key}",
+                                    help="Kapasitas produksi per bulan pada operasi penuh.")
+                                if m.get("role") == "Filling":
+                                    m["multiline_lanes"] = st.number_input(
+                                        "Jalur Maks (multijalur)", 1, 12,
+                                        int(m.get("multiline_lanes", 4)), 1, key=f"mlanes_{key}")
+                            _up = st.file_uploader("Gambar mesin (opsional)",
+                                type=["png","jpg","jpeg"], key=f"mimg_{key}")
+                            if _up is not None:
+                                ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+                                _ext  = _up.name.rsplit(".",1)[-1].lower()
+                                _path = ASSETS_DIR / f"{key}.{_ext}"
+                                _path.write_bytes(_up.read())
+                                m["image"] = str(_path)
+                                save_catalog(cat); st.rerun()
+                            if m.get("image") and Path(m["image"]).exists():
+                                if st.button("Hapus Gambar", key=f"delimg_{key}"):
+                                    Path(m["image"]).unlink(missing_ok=True)
+                                    m["image"] = ""; save_catalog(cat); st.rerun()
+                            if st.button("Hapus Mesin", key=f"del_{key}", type="secondary"):
+                                _to_delete = key
 
         if _to_delete:
-            del cat["machines"][_to_delete]
+            del machines[_to_delete]
             save_catalog(cat); st.rerun()
 
         st.markdown("---")
         with st.expander("Tambah Mesin Baru"):
             na1, na2 = st.columns(2)
             with na1:
-                new_key   = st.text_input("ID (unik, lowercase_)", key="nk")
-                new_full  = st.text_input("Nama Mesin", key="nfn")
-                new_role  = st.text_input("Komponen/Fungsi", key="nr")
-                new_fmt   = st.text_input("Format (SSS|BIB|STICKPACK)", key="nfmt")
+                new_full = st.text_input("Nama Mesin", key="nfn")
+                new_role = st.selectbox("Kategori", categories, key="nr")
+                new_fmt  = st.multiselect("Format", formats, key="nfmt")
             with na2:
-                new_capex = st.number_input("CAPEX (Rp)", 0, 50_000_000_000, 500_000_000, 10_000_000, format="%d", key="ncpx")
-                new_opex  = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000, 100_000, 5_000, format="%d", key="nopt")
-                new_kghr  = st.number_input("Kapasitas (kg/hr)", 0.0, 5000.0, 100.0, key="nkghr")
-                new_core  = st.checkbox("Core", True, key="nic")
+                new_capex = st.number_input("CAPEX (Rp)", 0, 50_000_000_000, 500_000_000,
+                                            10_000_000, format="%d", key="ncpx")
+                new_opex  = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000, 100_000,
+                                            5_000, format="%d", key="nopt")
+                new_tonm  = st.number_input("Kapasitas (ton/bln)", 0.0, 2000.0,
+                                            75.0, 5.0, key="ntonm",
+                                            help="Kapasitas produksi per bulan pada operasi penuh.")
             if st.button("Tambah Mesin", type="primary", key="add_machine"):
-                if new_key and new_full:
-                    cat["machines"][new_key] = {
-                        "full_name": new_full, "role": new_role, "capex": new_capex,
-                        "opex_per_ton": new_opex, "capacity_kg_hr": new_kghr,
-                        "format_compat": [x.strip() for x in new_fmt.split("|") if x.strip()],
-                        "is_core": new_core, "opex_rate": 0.05, "url": "",
+                if new_full.strip():
+                    # ID dibuat otomatis dari nama mesin
+                    _slug = "".join(ch if ch.isalnum() else "_"
+                                    for ch in new_full.strip().lower()).strip("_")
+                    while _slug in machines:
+                        _slug += "_1"
+                    machines[_slug] = {
+                        "name": new_role.upper(), "full_name": new_full.strip(),
+                        "role": new_role, "capex": new_capex,
+                        "opex_per_ton": new_opex, "opex_rate": 0.06,
+                        "capacity_kg_hr": 0.0, "capacity_ton_month": new_tonm,
+                        "format_compat": new_fmt, "multiline_lanes": 4,
+                        "image": "", "note": "",
                     }
-                    save_catalog(cat); st.success(f"Mesin '{new_full}' ditambahkan."); st.rerun()
+                    save_catalog(cat); st.success("Mesin ditambahkan."); st.rerun()
 
         if st.button("Simpan Katalog Mesin", type="primary", key="save_mesin"):
             save_catalog(cat); st.success("Katalog mesin disimpan.")
 
-    # ─── TAB 2: PAKET INVESTASI ──────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 2 — PAKET INTERVENSI (satu-satunya konsep paket)
+    # ════════════════════════════════════════════════════════════════════════
     with tab_paket:
-        st.markdown("**PAKET INVESTASI**")
-        st.caption("Konfigurasi kombinasi komponen mesin beserta estimasi CAPEX.")
+        st.markdown("**PAKET INVESTASI KAPASITAS**")
+        st.caption("Jenis investasi yang direkomendasikan sistem pada menu Evaluasi "
+                   "Kapasitas. Mode perhitungan menentukan cara sistem menghitung "
+                   "kapasitas dan kebutuhan filler.")
 
-        for pkg_key, pkg in cat["packages"].items():
-            with st.expander(f"**{pkg.get('name', pkg_key)}**", expanded=True):
-                pkg["name"] = st.text_input("Nama Paket", pkg.get("name",""), key=f"pn_{pkg_key}")
-                pkg["note"] = st.text_input("Catatan", pkg.get("note",""), key=f"pnt_{pkg_key}")
-                pkg["maintenance_annual"] = st.number_input(
-                    "Maintenance/Tahun (Rp)", 0, 2_000_000_000,
-                    int(pkg.get("maintenance_annual", ANNUAL_MAINTENANCE_FBMI)),
-                    10_000_000, format="%d", key=f"pm_{pkg_key}",
-                    help="Pak Ardi FBMI: Rp 20M/bulan = Rp 240M/tahun")
+        _MODE_OPTS = {
+            "replace":  "Penggantian unit (1 filler menanggung seluruh beban lini)",
+            "multilane":"Multijalur (kapasitas = jumlah jalur x kapasitas unit)",
+            "new_line": "Lini baru (menanggung selisih beban; lini existing tetap)",
+        }
 
-                st.markdown("**Komponen Mesin:**")
-                comps     = pkg.get("components", [])
-                new_comps = []
-                total_machine = 0
-                for ci, comp in enumerate(comps):
-                    cc1, cc2, cc3 = st.columns([5, 1, 1])
-                    with cc1:
-                        ckey = st.selectbox(
-                            "Mesin", list(machines.keys()),
-                            index=list(machines.keys()).index(comp["key"]) if comp["key"] in machines else 0,
-                            key=f"ck_{pkg_key}_{ci}",
-                            format_func=lambda k: machines.get(k,{}).get("full_name", k))
-                    with cc2:
-                        qty = st.number_input("Qty", 1, 20, int(comp.get("qty",1)), key=f"cq_{pkg_key}_{ci}")
-                    with cc3:
-                        unit_capex = machines.get(ckey, {}).get("capex", 0)
-                        st.caption(fmt_rp(unit_capex * qty))
-                        total_machine += unit_capex * qty
-                    new_comps.append({"key": ckey, "qty": qty})
-                pkg["components"] = new_comps
+        def _pkg_capex_preview(iv):
+            _mch = sum(float(machines.get(c["key"],{}).get("capex",0))*c.get("qty",1)
+                       for c in iv.get("components_extra",[]))
+            _ohp = sum(o["pct"] for o in cat.get("capex_overhead_items",[])
+                       if "all" in o.get("applies",["all"]) or _ivk in o.get("applies",[]))
+            _fix = sum(o["amount"] for o in cat.get("capex_fixed_items",[])
+                       if "all" in o.get("applies",["all"]) or _ivk in o.get("applies",[]))
+            return _mch, _ohp, _fix
 
-                # Tambah komponen baru
-                ac1, ac2, ac3 = st.columns([5, 1, 1])
-                with ac1:
-                    add_m = st.selectbox("+ Tambah", list(machines.keys()), key=f"add_{pkg_key}",
-                        format_func=lambda k: machines.get(k,{}).get("full_name", k))
-                with ac2:
-                    add_q = st.number_input("Qty", 1, 20, 1, key=f"addq_{pkg_key}")
-                with ac3:
-                    if st.button("＋", key=f"addbtn_{pkg_key}"):
-                        pkg["components"].append({"key": add_m, "qty": add_q})
-                        save_catalog(cat); st.rerun()
+        _iv_del = None
+        _iv_items = list(iv_pkgs.items())
+        for i in range(0, len(_iv_items), 2):
+            cols = st.columns(2)
+            for col, (_ivk, iv) in zip(cols, _iv_items[i:i+2]):
+                with col:
+                    with st.container(border=True):
+                        st.markdown(f"**{iv.get('name', _ivk)}**")
+                        iv["name"] = st.text_input("Nama Paket", iv.get("name", _ivk),
+                                                   key=f"ivn_{_ivk}")
+                        _mode_keys = list(_MODE_OPTS.keys())
+                        _mi = _mode_keys.index(iv.get("mode","replace")) if iv.get("mode") in _mode_keys else 0
+                        iv["mode"] = st.selectbox("Mode Perhitungan", _mode_keys,
+                            index=_mi, key=f"ivm_{_ivk}",
+                            format_func=lambda k: _MODE_OPTS[k])
+                        iv["applies_to"] = st.multiselect("Berlaku untuk tipe lini",
+                            line_types,
+                            default=[t for t in iv.get("applies_to", line_types) if t in line_types],
+                            key=f"iva_{_ivk}")
+                        st.markdown("**Komponen tambahan (di luar filler):**")
+                        _comps = iv.get("components_extra", [])
+                        _new_comps, _sub = [], 0
+                        for ci, comp in enumerate(_comps):
+                            c1, c2 = st.columns([3, 1])
+                            with c1:
+                                _mk_list = list(machines.keys())
+                                _cidx = _mk_list.index(comp["key"]) if comp["key"] in _mk_list else 0
+                                ck = st.selectbox("Mesin", _mk_list, index=_cidx,
+                                    key=f"ivck_{_ivk}_{ci}", label_visibility="collapsed",
+                                    format_func=lambda k: machines.get(k,{}).get("full_name",k))
+                            with c2:
+                                cq = st.number_input("Qty", 0, 20, int(comp.get("qty",1)),
+                                    key=f"ivcq_{_ivk}_{ci}", label_visibility="collapsed")
+                            if cq > 0:
+                                _new_comps.append({"key": ck, "qty": cq})
+                                _sub += machines.get(ck,{}).get("capex",0) * cq
+                        iv["components_extra"] = _new_comps
+                        a1, a2 = st.columns([3, 1])
+                        with a1:
+                            _am = st.selectbox("Tambah komponen", list(machines.keys()),
+                                key=f"ivadd_{_ivk}",
+                                format_func=lambda k: machines.get(k,{}).get("full_name",k))
+                        with a2:
+                            if st.button("Tambah", key=f"ivaddbtn_{_ivk}"):
+                                iv.setdefault("components_extra",[]).append({"key": _am, "qty": 1})
+                                save_catalog(cat); st.rerun()
+                        # Estimasi linked: mesin + overhead + biaya tetap dari master CAPEX
+                        _mch, _ohp, _fix = _pkg_capex_preview(iv)
+                        st.markdown(
+                            f'<div style="font-size:.78rem;color:#071952;background:#F4FBFC;'
+                            f'border-radius:6px;padding:8px 12px;margin-top:6px;">'
+                            f'Komponen: <b>{fmt_rp(_sub)}</b> &nbsp;|&nbsp; '
+                            f'Overhead: <b>{_ohp*100:.0f}%</b> &nbsp;|&nbsp; '
+                            f'Biaya tetap: <b>{fmt_rp(_fix)}</b><br>'
+                            f'Estimasi paket (tanpa filler): '
+                            f'<b>{fmt_rp(_sub*(1+_ohp)+_fix)}</b></div>',
+                            unsafe_allow_html=True)
+                        if st.button("Hapus Paket", key=f"ivdel_{_ivk}", type="secondary"):
+                            _iv_del = _ivk
+        if _iv_del:
+            del iv_pkgs[_iv_del]; save_catalog(cat); st.rerun()
 
-                # CAPEX summary
-                overhead_pct  = OVERHEAD_TOTAL
-                overhead_amt  = int(total_machine * overhead_pct)
-                from modules.financial_calc import COMMISSIONING_FIXED
-                total_capex   = int(total_machine + overhead_amt + COMMISSIONING_FIXED)
-                pkg["overhead_pct"] = overhead_pct
-
-                st.markdown(f"""
-**Estimasi CAPEX Total: {fmt_rp(total_capex)}**
-- Mesin: {fmt_rp(total_machine)}
-- Overhead ({overhead_pct*100:.0f}%): {fmt_rp(overhead_amt)}
-- Komisioning & Training: {fmt_rp(COMMISSIONING_FIXED)}
-""")
-                st.caption(f"OPEX/tahun: Maintenance {fmt_rp(pkg['maintenance_annual'])} "
-                           f"+ Operator {fmt_rp(ANNUAL_OPERATOR)} + QC {fmt_rp(ANNUAL_QC)} "
-                           f"= {fmt_rp(pkg['maintenance_annual'] + ANNUAL_OPERATOR + ANNUAL_QC)}")
-
-        # Tambah paket baru
-        st.markdown("---")
-        with st.expander("Tambah Paket Baru"):
+        with st.expander("Tambah Paket Investasi Baru"):
             np1, np2 = st.columns(2)
             with np1:
-                npkg_key  = st.text_input("ID Paket (unik, lowercase_)", key="npk")
-                npkg_name = st.text_input("Nama Paket", key="npn")
+                _np_key  = st.text_input("ID paket (unik)", key="np_key")
+                _np_name = st.text_input("Nama paket", key="np_name")
             with np2:
-                npkg_note = st.text_input("Catatan", key="npnt")
-            if st.button("Buat Paket", type="primary", key="create_pkg"):
-                if npkg_key and npkg_name:
-                    cat["packages"][npkg_key] = {
-                        "name": npkg_name, "note": npkg_note,
-                        "components": [], "overhead_pct": OVERHEAD_TOTAL,
-                        "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
+                _np_mode = st.selectbox("Mode Perhitungan", list(_MODE_OPTS.keys()),
+                    key="np_mode", format_func=lambda k: _MODE_OPTS[k])
+                _np_appl = st.multiselect("Berlaku untuk tipe lini", line_types,
+                    default=line_types, key="np_appl")
+            if st.button("Tambah Paket", type="primary", key="np_add"):
+                if _np_key.strip() and _np_name.strip() and _np_key.strip() not in iv_pkgs:
+                    iv_pkgs[_np_key.strip()] = {
+                        "name": _np_name.strip(), "mode": _np_mode,
+                        "applies_to": _np_appl, "components_extra": [],
                     }
-                    save_catalog(cat); st.success(f"Paket '{npkg_name}' dibuat."); st.rerun()
+                    save_catalog(cat); st.rerun()
 
-        if st.button("Simpan Paket", type="primary", key="save_paket"):
-            save_catalog(cat); st.success("Paket investasi disimpan.")
+        st.markdown("---")
+        st.markdown("**ALUR KOMPONEN LINI**")
+        st.caption("Urutan kategori komponen penyusun tiap tipe lini — referensi "
+                   "kelengkapan paket dan dasar penambahan tipe lini baru.")
+        bp = cat.setdefault("line_blueprints", {})
+        _bp_cols = st.columns(min(len(line_types), 3))
+        for i, lt in enumerate(line_types):
+            with _bp_cols[i % len(_bp_cols)]:
+                st.markdown(f"**{lt}**")
+                bp[lt] = st.multiselect(f"Alur {lt}", categories,
+                    default=[c for c in bp.get(lt, categories) if c in categories],
+                    key=f"bp_{lt}", label_visibility="collapsed")
+        _nl1, _nl2 = st.columns([3, 1])
+        with _nl1:
+            _new_lt = st.text_input("Tipe lini baru", key="new_lt",
+                                    placeholder="Nama tipe lini baru")
+        with _nl2:
+            if st.button("Tambah Tipe", key="add_lt") and _new_lt.strip():
+                if _new_lt.strip() not in line_types:
+                    line_types.append(_new_lt.strip())
+                    bp[_new_lt.strip()] = list(categories)
+                    save_catalog(cat); st.rerun()
 
-    # ─── TAB 3: OVERHEAD CAPEX ───────────────────────────────────────────────
+        if st.button("Simpan Paket & Alur", type="primary", key="save_iv"):
+            save_catalog(cat); st.success("Paket investasi dan alur lini disimpan.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 3 — CAPEX
+    # ════════════════════════════════════════════════════════════════════════
     with tab_capex:
-        st.markdown("**OVERHEAD CAPEX**")
-        st.caption("Komponen biaya tambahan di luar harga mesin.")
+        st.markdown("**CAPEX**")
+        st.caption("Komponen biaya investasi di luar harga mesin. Setiap item dapat "
+                   "diterapkan ke semua paket atau paket tertentu.")
 
-        overhead = cat.get("capex_overhead", OVERHEAD)
-        st.markdown("**Overhead % dari total harga mesin:**")
-        oh_cols   = st.columns(len(overhead))
-        new_overhead = {}
-        for i, (k, v) in enumerate(overhead.items()):
-            with oh_cols[i]:
-                new_overhead[k] = st.number_input(
-                    k, 0.0, 50.0, float(v)*100, 0.5, key=f"oh_{k}") / 100
-        cat["capex_overhead"] = new_overhead
+        cx1, cx2 = st.columns(2)
+        with cx1:
+            st.markdown("**Overhead (% dari harga mesin)**")
+            _oh_items = cat.setdefault("capex_overhead_items", [])
+            _oh_del = None
+            for i, it in enumerate(_oh_items):
+                with st.container(border=True):
+                    st.markdown(f"**{it.get('label','Item')}**")
+                    it["label"] = st.text_input("Nama", it.get("label",""), key=f"ohl_{i}")
+                    it["pct"] = st.number_input("Persen (%)", 0.0, 50.0,
+                        float(it.get("pct",0))*100, 0.5, key=f"ohp_{i}") / 100
+                    it["applies"] = st.multiselect("Diterapkan pada", _pkg_opts,
+                        default=[a for a in it.get("applies",["all"]) if a in _pkg_opts],
+                        key=f"oha_{i}", format_func=lambda k: _pkg_lbl.get(k,k))
+                    if st.button("Hapus", key=f"ohd_{i}"): _oh_del = i
+            if _oh_del is not None:
+                _oh_items.pop(_oh_del); save_catalog(cat); st.rerun()
+            if st.button("Tambah Item Overhead", key="oh_add"):
+                _oh_items.append({"label":"Item Baru","pct":0.01,"applies":["all"]})
+                save_catalog(cat); st.rerun()
 
-        from modules.financial_calc import COMMISSIONING_FIXED as _cf
-        st.markdown(f"**Biaya Tetap Tambahan:**")
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            st.metric("Komisioning", fmt_rp(_cf * 0.7))
-        with sc2:
-            st.metric("Training", fmt_rp(_cf * 0.3))
-        st.caption(f"Total komisioning + training: {fmt_rp(_cf)} (dapat diubah di `financial_calc.py`)")
+        with cx2:
+            st.markdown("**Biaya Tetap (Rp per paket)**")
+            _fx_items = cat.setdefault("capex_fixed_items", [])
+            _fx_del = None
+            for i, it in enumerate(_fx_items):
+                with st.container(border=True):
+                    st.markdown(f"**{it.get('label','Item')}**")
+                    it["label"] = st.text_input("Nama", it.get("label",""), key=f"fxl_{i}")
+                    it["amount"] = st.number_input("Nilai (Rp)", 0, 5_000_000_000,
+                        int(it.get("amount",0)), 5_000_000, format="%d", key=f"fxa_{i}")
+                    it["applies"] = st.multiselect("Diterapkan pada", _pkg_opts,
+                        default=[a for a in it.get("applies",["all"]) if a in _pkg_opts],
+                        key=f"fxap_{i}", format_func=lambda k: _pkg_lbl.get(k,k))
+                    if st.button("Hapus", key=f"fxd_{i}"): _fx_del = i
+            if _fx_del is not None:
+                _fx_items.pop(_fx_del); save_catalog(cat); st.rerun()
+            if st.button("Tambah Biaya Tetap", key="fx_add"):
+                _fx_items.append({"label":"Item Baru","amount":10_000_000,"applies":["all"]})
+                save_catalog(cat); st.rerun()
 
-        new_total = sum(new_overhead.values()) * 100
-        st.info(f"Total overhead: **{new_total:.1f}%** dari harga mesin")
+        _total_oh = sum(it["pct"] for it in cat.get("capex_overhead_items",[])) * 100
+        st.info(f"Total overhead (semua item): **{_total_oh:.1f}%** dari harga mesin")
+        if st.button("Simpan CAPEX", type="primary", key="save_cx"):
+            save_catalog(cat); st.success("CAPEX disimpan.")
 
-        if st.button("Simpan Overhead", type="primary", key="save_oh"):
-            save_catalog(cat); st.success("Overhead CAPEX disimpan.")
-
-    # ─── TAB 4: OPEX & MANPOWER ─────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 4 — OPEX
+    # ════════════════════════════════════════════════════════════════════════
     with tab_opex:
-        st.markdown("**OPEX & MANPOWER**")
-        st.caption("Biaya operasional dan tenaga kerja tahunan untuk penambahan lini.")
+        st.markdown("**OPEX**")
+        st.caption("Biaya operasional tahunan. Setiap item dapat diterapkan ke semua "
+                   "paket atau paket tertentu.")
 
-        opex = cat.get("opex_manpower", {
-            "operator_annual": ANNUAL_OPERATOR,
-            "qc_annual": ANNUAL_QC,
-            "maintenance_annual": ANNUAL_MAINTENANCE_FBMI,
-        })
+        with st.expander("Kalkulator Biaya Tenaga Kerja (UMK)"):
+            kc1, kc2, kc3, kc4 = st.columns(4)
+            with kc1:
+                _umr = st.number_input("UMK/bulan (Rp)", 3_000_000, 15_000_000,
+                    int(cat.get("opex_umr_monthly", 5_558_515)), 100_000, format="%d",
+                    key="om_umr", help="Referensi: UMK Kabupaten Bekasi 2025 sekitar Rp 5,56 juta")
+            with kc2:
+                _thr = st.number_input("THR (bulan gaji)", 1, 3, 1, key="om_thr")
+            with kc3:
+                _bpjs = st.number_input("BPJS (%)", 10, 25, 15, 1, key="om_bpjs")
+            with kc4:
+                _annual = int(_umr * (12 + _thr) * (1 + _bpjs/100))
+                st.metric("Biaya/orang/tahun", fmt_rp(_annual))
+            cat["opex_umr_monthly"] = _umr
+            st.caption("Gunakan nilai ini saat mengisi item biaya tenaga kerja di bawah.")
 
-        oc1, oc2, oc3 = st.columns(3)
-        with oc1:
-            st.markdown("**Maintenance**")
-            opex["maintenance_annual"] = st.number_input(
-                "Biaya Maintenance/Tahun (Rp)", 0, 1_000_000_000,
-                int(opex.get("maintenance_annual", ANNUAL_MAINTENANCE_FBMI)),
-                5_000_000, format="%d", key="om_maint",
-                help="Pak Ardi FBMI: Rp 20 juta/bulan = Rp 240M/tahun")
-            st.caption(f"≈ {fmt_rp(opex['maintenance_annual']/12)}/bulan")
+        _ox_items = cat.setdefault("opex_items", [])
+        _ox_del = None
+        for i in range(0, len(_ox_items), 2):
+            cols = st.columns(2)
+            for col, idx in zip(cols, range(i, min(i+2, len(_ox_items)))):
+                it = _ox_items[idx]
+                with col:
+                    with st.container(border=True):
+                        st.markdown(f"**{it.get('label','Item')}**")
+                        it["label"] = st.text_input("Nama", it.get("label",""), key=f"oxl_{idx}")
+                        it["annual"] = st.number_input("Biaya/Tahun (Rp)", 0, 10_000_000_000,
+                            int(it.get("annual",0)), 5_000_000, format="%d", key=f"oxa_{idx}")
+                        it["applies"] = st.multiselect("Diterapkan pada", _pkg_opts,
+                            default=[a for a in it.get("applies",["all"]) if a in _pkg_opts],
+                            key=f"oxap_{idx}", format_func=lambda k: _pkg_lbl.get(k,k))
+                        st.caption(f"= {fmt_rp(it['annual']/12)}/bulan")
+                        if st.button("Hapus", key=f"oxd_{idx}"): _ox_del = idx
+        if _ox_del is not None:
+            _ox_items.pop(_ox_del); save_catalog(cat); st.rerun()
+        if st.button("Tambah Item OPEX", key="ox_add"):
+            _ox_items.append({"label":"Item Baru","annual":50_000_000,"applies":["all"]})
+            save_catalog(cat); st.rerun()
 
-        with oc2:
-            st.markdown("**Operator (per orang)**")
-            umr      = st.number_input("UMR Bekasi/bulan (Rp)", 3_000_000, 15_000_000,
-                5_126_897, 100_000, format="%d", key="om_umr",
-                help="UMR Bekasi 2024: Rp 5.127M")
-            thr_m    = st.number_input("THR (bulan gaji)", 1, 3, 1, key="om_thr")
-            bpjs_pct = st.number_input("BPJS (%)", 10, 25, 15, 1, key="om_bpjs")
-            op_annual = int(umr * (12 + thr_m) * (1 + bpjs_pct/100))
-            opex["operator_annual"] = op_annual
-            st.metric("Total/orang/tahun", fmt_rp(op_annual))
+        if st.button("Simpan OPEX", type="primary", key="save_ox"):
+            save_catalog(cat); st.success("OPEX disimpan.")
 
-        with oc3:
-            st.markdown("**QC (per orang)**")
-            umr_qc   = st.number_input("UMR Bekasi/bulan (Rp)", 3_000_000, 15_000_000,
-                5_126_897, 100_000, format="%d", key="om_umrqc")
-            thr_qc   = st.number_input("THR (bulan gaji)", 1, 3, 1, key="om_thrqc")
-            bpjs_qc  = st.number_input("BPJS (%)", 10, 25, 15, 1, key="om_bpjsqc")
-            qc_annual = int(umr_qc * (12 + thr_qc) * (1 + bpjs_qc/100))
-            opex["qc_annual"] = qc_annual
-            st.metric("Total/orang/tahun", fmt_rp(qc_annual))
-
-        total_opex = opex["maintenance_annual"] + opex["operator_annual"] + opex["qc_annual"]
-        st.info(f"**Total OPEX/tahun (lini baru): {fmt_rp(total_opex)}**\n\n"
-                f"Maintenance {fmt_rp(opex['maintenance_annual'])} + "
-                f"Operator {fmt_rp(opex['operator_annual'])} + "
-                f"QC {fmt_rp(opex['qc_annual'])}")
-        cat["opex_manpower"] = opex
-
-        if st.button("Simpan OPEX", type="primary", key="save_opex"):
-            save_catalog(cat); st.success("Parameter OPEX disimpan.")
-
-    # ─── TAB 5: PARAMETER FINANSIAL ─────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 5 — PARAMETER FINANSIAL
+    # ════════════════════════════════════════════════════════════════════════
     with tab_param:
         st.markdown("**PARAMETER FINANSIAL**")
         st.caption("Parameter evaluasi kelayakan investasi yang berlaku di seluruh menu.")
 
-        gp = cat.get("global_params", {k: v for k, v in DEFAULT_PARAMS.items()})
+        gp = cat.setdefault("global_params", dict(DEFAULT_PARAMS))
 
-        pc1, pc2, pc3 = st.columns(3)
+        pc1, pc2 = st.columns(2)
         with pc1:
-            st.markdown("**Asumsi Dasar**")
-            gp["discount_rate"]         = st.number_input(
-                "Discount Rate / WACC (%)", 5.0, 30.0,
-                float(gp.get("discount_rate", 0.12))*100, 0.5, key="gp_dr") / 100
-            gp["project_lifetime_year"] = st.number_input(
-                "Umur Proyek (tahun)", 3, 20,
-                int(gp.get("project_lifetime_year", 5)), 1, key="gp_pl")
-            gp["useful_life_year"]      = st.number_input(
-                "Umur Ekonomis Aset (tahun, untuk depresiasi)", 3, 20,
-                int(gp.get("useful_life_year", 5)), 1, key="gp_ul",
-                help="Dasar perhitungan depresiasi straight-line (tax shield)")
-            gp["tax_rate"]              = st.number_input(
-                "Tarif Pajak Korporasi (%)", 0.0, 40.0,
-                float(gp.get("tax_rate", 0.25))*100, 1.0, key="gp_tax") / 100
+            with st.container(border=True):
+                st.markdown("**Asumsi Dasar**")
+                gp["discount_rate"] = st.number_input("Discount Rate / WACC (%)", 5.0, 30.0,
+                    float(gp.get("discount_rate",0.13))*100, 0.5, key="gp_dr") / 100
+                gp["project_lifetime_year"] = st.number_input("Umur Proyek (tahun)", 3, 20,
+                    int(gp.get("project_lifetime_year",5)), 1, key="gp_pl")
+                gp["useful_life_year"] = st.number_input("Umur Ekonomis Aset (tahun)", 3, 20,
+                    int(gp.get("useful_life_year",5)), 1, key="gp_ul",
+                    help="Dasar depresiasi straight-line")
+                gp["tax_rate"] = st.number_input("Tarif Pajak (%)", 0.0, 40.0,
+                    float(gp.get("tax_rate",0.25))*100, 1.0, key="gp_tax") / 100
+                gp["inflation_rate"] = st.number_input("Inflasi Tahunan (%)", 0.0, 15.0,
+                    float(gp.get("inflation_rate",0.03))*100, 0.5, key="gp_inf") / 100
+                gp["maintenance_capex_pct"] = st.number_input(
+                    "Maintenance CAPEX (%/thn dari investasi)", 0.0, 5.0,
+                    float(gp.get("maintenance_capex_pct",0.008))*100, 0.1, key="gp_mcx") / 100
+            with st.container(border=True):
+                st.markdown("**Threshold Kelayakan**")
+                gp["minimum_npv"] = st.number_input("NPV Minimum (Rp)",
+                    -1_000_000_000, 5_000_000_000, int(gp.get("minimum_npv",0)),
+                    100_000_000, format="%d", key="gp_npv")
+                gp["minimum_irr"] = st.number_input("IRR Minimum (%)", 5.0, 50.0,
+                    float(gp.get("minimum_irr",0.15))*100, 0.5, key="gp_irr") / 100
+                gp["minimum_roi"] = st.number_input("ROI Minimum (%)", 5.0, 100.0,
+                    float(gp.get("minimum_roi",0.25))*100, 1.0, key="gp_roi") / 100
+                gp["payback_threshold_year"] = st.number_input("Payback Maksimal (tahun)",
+                    1, 10, int(gp.get("payback_threshold_year",3)), 1, key="gp_pb")
 
         with pc2:
-            st.markdown("**Threshold Kelayakan**")
-            gp["minimum_npv"]           = st.number_input(
-                "NPV Minimum (Rp)", -1_000_000_000, 5_000_000_000,
-                int(gp.get("minimum_npv", 0)), 100_000_000, format="%d", key="gp_npv")
-            gp["minimum_irr"]           = st.number_input(
-                "IRR Minimum (%)", 5.0, 50.0,
-                float(gp.get("minimum_irr", 0.15))*100, 0.5, key="gp_irr") / 100
-            gp["minimum_roi"]           = st.number_input(
-                "ROI Minimum (%)", 5.0, 100.0,
-                float(gp.get("minimum_roi", 0.25))*100, 1.0, key="gp_roi") / 100
-            gp["payback_threshold_year"] = st.number_input(
-                "Payback Maksimal (tahun)", 1, 10,
-                int(gp.get("payback_threshold_year", 3)), 1, key="gp_pb")
+            with st.container(border=True):
+                st.markdown("**Nilai Manfaat**")
+                st.caption("Dasar penilaian manfaat ekonomis kapasitas tambahan, "
+                           "berlaku untuk seluruh jenis investasi.")
+                gp["internal_value_per_ton"] = st.number_input(
+                    "Nilai Manfaat per Ton (Rp)",
+                    500_000, 10_000_000, int(gp.get("internal_value_per_ton",2_100_000)),
+                    100_000, format="%d", key="gp_ivt",
+                    help="Margin kontribusi per ton kapasitas tambahan yang terserap. "
+                         "Referensi internal perusahaan.")
+                gp["realization_factor"] = st.number_input("Faktor Realisasi", 0.50, 1.00,
+                    float(gp.get("realization_factor",0.75)), 0.05, key="gp_rf",
+                    help="Porsi kapasitas tambahan yang diasumsikan terserap demand.")
 
-        with pc3:
-            st.markdown("**Nilai Benefit**")
-            gp["internal_value_per_ton"] = st.number_input(
-                "Nilai Internal/Ton (Rp)", 500_000, 10_000_000,
-                int(gp.get("internal_value_per_ton", 2_100_000)), 100_000,
-                format="%d", key="gp_ivt",
-                help="Margin kontribusi per ton produksi internal")
-            gp["maklon_cost_per_ton"]    = st.number_input(
-                "Biaya Maklon/Ton (Rp)", 1_000_000, 20_000_000,
-                int(gp.get("maklon_cost_per_ton", 6_500_000)), 100_000,
-                format="%d", key="gp_mct",
-                help="Biaya total CO-MAN per ton (harga beli dari pihak ketiga)")
-            gp["internal_cost_per_ton"]  = st.number_input(
-                "Biaya Produksi Internal/Ton (Rp)", 500_000, 15_000_000,
-                int(gp.get("internal_cost_per_ton", 5_000_000)), 100_000,
-                format="%d", key="gp_ict",
-                help="Biaya produksi internal per ton")
-            savings = gp["maklon_cost_per_ton"] - gp["internal_cost_per_ton"]
-            st.metric("Savings per Ton (Maklon→Internal)", fmt_rp(savings))
-            gp["realization_factor"]     = st.number_input(
-                "Realization Factor", 0.50, 1.00,
-                float(gp.get("realization_factor", 0.75)), 0.05, key="gp_rf",
-                help="Faktor koreksi: berapa % dari demand forecast yang benar-benar terealisasi")
+            with st.container(border=True):
+                st.markdown("**Konfigurasi Perhitungan Kelayakan**")
+                st.caption("Tentukan komponen yang disertakan dalam perhitungan "
+                           "NPV/IRR/ROI/Payback. Rincian langkah perhitungan dapat "
+                           "dilihat pada menu Evaluasi Kapasitas.")
+                _cc = cat.setdefault("calc_config", {})
+                _cc["include_tax"] = st.toggle("Sertakan pajak & depresiasi (tax shield)",
+                    _cc.get("include_tax", True), key="cc_tax")
+                _cc["include_inflation"] = st.toggle("Sertakan eskalasi inflasi biaya",
+                    _cc.get("include_inflation", True), key="cc_inf")
+                _cc["include_maint_capex"] = st.toggle("Sertakan maintenance CAPEX tahunan",
+                    _cc.get("include_maint_capex", True), key="cc_mcx")
+                _cc["payback_discounted"] = st.toggle("Payback terdiskonto (discounted payback)",
+                    _cc.get("payback_discounted", False), key="cc_pbd",
+                    help="Nonaktif = payback sederhana (standar model referensi internal)")
+                st.markdown("<div style='margin-top:6px;font-size:.78rem;font-weight:700;"
+                            "color:#071952;'>Komposisi Volume Bernilai (dasar manfaat):</div>",
+                            unsafe_allow_html=True)
+                _cc["benefit_include_unmet"] = st.toggle(
+                    "Sertakan Unmet Demand Tahunan",
+                    _cc.get("benefit_include_unmet", True), key="cc_bun")
+                _cc["benefit_include_headroom"] = st.toggle(
+                    "Sertakan Headroom Kapasitas",
+                    _cc.get("benefit_include_headroom", True), key="cc_bhd")
+                _cc["benefit_apply_realization"] = st.toggle(
+                    "Terapkan Faktor Realisasi pada Headroom",
+                    _cc.get("benefit_apply_realization", True), key="cc_brf")
 
-        # Preview kalkulasi
+            with st.container(border=True):
+                st.markdown("**Parameter Tambahan**")
+                st.caption("Parameter baru dengan peran yang jelas dalam perhitungan.")
+                _USAGE = {
+                    "doc":        "Dokumentasi / sensitivitas (tidak masuk perhitungan)",
+                    "opex_add":   "Penambah OPEX tahunan (Rp/tahun)",
+                    "capex_add":  "Penambah CAPEX (Rp, satu kali)",
+                    "benefit_cut":"Pengurang benefit tahunan (Rp/tahun)",
+                }
+                _UNIT = {"rp": "Rupiah (Rp)", "pct": "Persentase (%)",
+                         "year": "Tahun", "factor": "Faktor/Rasio"}
+                _cust = cat.setdefault("custom_params", {})
+                _cdel = None
+                for ck, cv in list(_cust.items()):
+                    if not isinstance(cv, dict): cv = {"value": float(cv), "usage": "doc", "unit": "factor"}
+                    with st.container(border=True):
+                        st.markdown(f"**{ck}**")
+                        _un = list(_UNIT.keys())
+                        cv["unit"] = st.selectbox("Satuan", _un,
+                            index=_un.index(cv.get("unit","factor")) if cv.get("unit") in _un else 3,
+                            key=f"cpun_{ck}", format_func=lambda k: _UNIT[k])
+                        if cv["unit"] == "rp":
+                            cv["value"] = float(st.number_input("Nilai (Rp)", 0, 100_000_000_000,
+                                int(cv.get("value",0)), 1_000_000, format="%d", key=f"cpv_{ck}"))
+                        elif cv["unit"] == "pct":
+                            cv["value"] = st.number_input("Nilai (%)", 0.0, 100.0,
+                                float(cv.get("value",0)), 0.5, key=f"cpv_{ck}")
+                        elif cv["unit"] == "year":
+                            cv["value"] = float(st.number_input("Nilai (tahun)", 0, 50,
+                                int(cv.get("value",0)), 1, key=f"cpv_{ck}"))
+                        else:
+                            cv["value"] = st.number_input("Nilai", value=float(cv.get("value",0)),
+                                key=f"cpv_{ck}", format="%.4f")
+                        _uk = list(_USAGE.keys())
+                        cv["usage"] = st.selectbox("Peran dalam perhitungan", _uk,
+                            index=_uk.index(cv.get("usage","doc")) if cv.get("usage") in _uk else 0,
+                            key=f"cpu_{ck}", format_func=lambda k: _USAGE[k])
+                        _cust[ck] = cv
+                        if st.button("Hapus", key=f"cpd_{ck}"): _cdel = ck
+                if _cdel: del _cust[_cdel]; save_catalog(cat); st.rerun()
+                _ncn, _ncb = st.columns([3, 1])
+                with _ncn:
+                    _ncp = st.text_input("Nama parameter baru", key="ncp_name",
+                                         label_visibility="collapsed",
+                                         placeholder="Nama parameter baru")
+                with _ncb:
+                    if st.button("Tambah", key="ncp_add") and _ncp.strip():
+                        _cust[_ncp.strip()] = {"value": 0.0, "usage": "doc"}
+                        save_catalog(cat); st.rerun()
+
+        # ── TRANSPARANSI FORMULA ─────────────────────────────────────────
+        # Formula ditulis dengan NAMA parameter pada halaman ini — setiap
+        # parameter dapat diubah pada kartu di atas; komponen yang disertakan
+        # diatur pada Konfigurasi Perhitungan Kelayakan.
         st.markdown("---")
-        st.markdown("**Preview Kalkulasi Cepat**")
-        prev1, prev2 = st.columns(2)
-        with prev1:
-            test_capex = st.number_input("CAPEX Test (Rp)", 1_000_000_000, 20_000_000_000,
-                11_900_000_000, 500_000_000, format="%d", key="prev_capex",
-                help="Referensi: ~Rp 11.9B per data Pak Ardi FBMI")
-            test_ton   = st.number_input("Volume Tambahan/Tahun (ton)", 100, 10000, 1200, 100, key="prev_ton")
+        st.markdown("**TRANSPARANSI FORMULA PERHITUNGAN**")
+        st.caption("Cara sistem menghitung setiap metrik kelayakan, ditulis dengan "
+                   "parameter pada halaman ini. Mengubah parameter di atas otomatis "
+                   "mengubah hasil perhitungan di seluruh sistem.")
+        _ccv = cat.get("calc_config", {})
+        _on  = lambda f: "" if _ccv.get(f, True) else "  — [nonaktif]"
+        _wacc_s = f"{float(gp.get('discount_rate',0.13))*100:.0f}%"
+        _tax_s  = f"{float(gp.get('tax_rate',0.25))*100:.0f}%"
+        _ul_s   = f"{int(gp.get('useful_life_year',5))} thn"
+        _n_s    = f"{int(gp.get('project_lifetime_year',5))} thn"
+        _mcx_s  = f"{float(gp.get('maintenance_capex_pct',0.008))*100:.1f}%"
+        _pbm    = ("akumulasi FCF terdiskonto mencapai Total CAPEX"
+                   if _ccv.get("payback_discounted", False)
+                   else "akumulasi FCF mencapai Total CAPEX")
+        _vb_terms = []
+        if _ccv.get("benefit_include_unmet", True):
+            _vb_terms.append("Unmet Demand Tahunan")
+        if _ccv.get("benefit_include_headroom", True):
+            _vb_terms.append("Headroom Kapasitas × Faktor Realisasi"
+                             if _ccv.get("benefit_apply_realization", True)
+                             else "Headroom Kapasitas")
+        _vb_formula = " + ".join(_vb_terms) if _vb_terms else "— [seluruh komponen nonaktif]"
+        _frm_rows = [
+            ("Volume Bernilai", _vb_formula),
+            ("Manfaat Tahunan", "Volume Bernilai × Nilai Manfaat per Ton"),
+            ("OPEX Tahunan", "Jumlah seluruh item OPEX yang berlaku pada paket investasi"),
+            ("Depresiasi", f"Total CAPEX ÷ Umur Ekonomis Aset ({_ul_s})" + _on("include_tax")),
+            ("Pajak Kas", f"Laba Operasional (bila positif) × Tarif Pajak ({_tax_s})" + _on("include_tax")),
+            ("Maintenance CAPEX", f"Maintenance CAPEX ({_mcx_s}) × Total CAPEX" + _on("include_maint_capex")),
+            ("Eskalasi Biaya", "Biaya meningkat sebesar Inflasi Tahunan tiap tahun" + _on("include_inflation")),
+            ("Arus Kas Bersih (FCF)", "Manfaat Tahunan − OPEX Tahunan − Pajak Kas − Maintenance CAPEX"),
+            ("NPV", f"Σ FCF tahun-t ÷ (1 + WACC {_wacc_s})^t − Total CAPEX, selama Umur Proyek ({_n_s})"),
+            ("IRR", "Tingkat diskonto yang menjadikan NPV = 0 — kriteria: ≥ IRR Minimum"),
+            ("ROI per Tahun", "Arus Kas Bersih Tahunan ÷ Total CAPEX — kriteria: ≥ ROI Minimum"),
+            ("Payback Period", f"Tahun saat {_pbm} — kriteria: ≤ Payback Maksimal"),
+        ]
+        st.dataframe(pd.DataFrame(_frm_rows, columns=["Metrik", "Formula"]),
+                     use_container_width=True, hide_index=True)
+        st.caption("Rincian nilai aktual tiap langkah untuk skenario tertentu dapat "
+                   "dilihat pada Transparansi Perhitungan di menu Evaluasi Kapasitas.")
 
-        with prev2:
-            opex_man = cat["opex_manpower"]
-            test_opex = opex_man.get("maintenance_annual", ANNUAL_MAINTENANCE_FBMI) + \
-                        opex_man.get("operator_annual", ANNUAL_OPERATOR) + \
-                        opex_man.get("qc_annual", ANNUAL_QC)
-            gp["maintenance_annual"] = opex_man.get("maintenance_annual", ANNUAL_MAINTENANCE_FBMI)
-
-            from modules.financial_calc import compute_financial
-            result = compute_financial(test_capex, test_ton, gp, test_opex)
-            st.markdown(f"""
-| Metrik | Nilai |
-|--------|-------|
-| NPV | {fmt_rp(result['npv'])} |
-| IRR | {f"{result['irr_pct']:.1f}%" if result['irr_pct'] else "N/A"} |
-| ROI/tahun | {result['roi_pct']:.1f}% |
-| Payback | {f"{result['payback_year']:.1f} tahun" if result['payback_year'] else "N/A"} |
-| FCF/tahun | {fmt_rp(result['annual_fcf'])} |
-| LAYAK | {" Ya" if result['feasible'] else " Tidak"} |
-""")
-        cat["global_params"] = gp
-        if st.button("Simpan Parameter Finansial", type="primary", key="save_param"):
+        if st.button("Simpan Parameter", type="primary", key="save_gp"):
+            cat["global_params"] = gp
             save_catalog(cat); st.success("Parameter finansial disimpan.")
-
-    # ── Simpan semua ──────────────────────────────────────────────────────────
-    st.markdown("---")
-    if st.button("Simpan Semua Perubahan", type="primary", key="save_all"):
-        save_catalog(cat)
-        set_("investment_catalog", cat)
-        st.success("Semua perubahan disimpan ke katalog investasi.")
-        st.rerun()

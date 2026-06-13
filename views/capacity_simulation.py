@@ -72,6 +72,13 @@ def _plot_outputs(result_df):
 
 
 def render():
+
+    def _disp(df, n=None):
+        """Bulatkan kolom numerik (2 desimal) untuk tampilan tabel yang rapi."""
+        d = df.head(n).copy() if n else df.copy()
+        for c in d.select_dtypes(include="number").columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(2)
+        return d
     st.markdown(
         '<div class="page-title">SIMULASI KAPASITAS</div>',
         unsafe_allow_html=True,
@@ -106,7 +113,7 @@ def render():
         warning("Data input belum tersedia. Buat dari Demand Overview atau upload file.")
     else:
         st.caption(f"Input source: {source_note}")
-        st.dataframe(forecast_input.head(120), use_container_width=True, hide_index=True)
+        st.dataframe(_disp(forecast_input, 120), use_container_width=True, hide_index=True)
 
     st.markdown("<div class='section-title'>Konfigurasi Lini</div>", unsafe_allow_html=True)
     bcol, gcol, dcol = st.columns(3)
@@ -201,14 +208,14 @@ def render():
     _summary_cards(result_df, {"products_analyzed": len(input_df) if input_df is not None else 0, "holiday_days": holiday_cutoff})
     data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input", "Charts", "Export Result"])
     with data_tabs[0]:
-        st.dataframe(result_df, use_container_width=True, hide_index=True)
+        st.dataframe(_disp(result_df), use_container_width=True, hide_index=True)
     with data_tabs[1]:
-        st.dataframe(scenario_df, use_container_width=True, hide_index=True)
+        st.dataframe(_disp(scenario_df), use_container_width=True, hide_index=True)
     with data_tabs[2]:
-        st.dataframe(planned_jobs_df.head(DEFAULT_PLANNED_PREVIEW_ROWS), use_container_width=True, hide_index=True)
+        st.dataframe(_disp(planned_jobs_df, DEFAULT_PLANNED_PREVIEW_ROWS), use_container_width=True, hide_index=True)
         st.caption(f"Preview dibatasi {DEFAULT_PLANNED_PREVIEW_ROWS:,} baris. Export Excel untuk data lengkap.")
     with data_tabs[3]:
-        st.dataframe(input_df.head(2000), use_container_width=True, hide_index=True)
+        st.dataframe(_disp(input_df, 2000), use_container_width=True, hide_index=True)
     with data_tabs[4]:
         _plot_outputs(result_df)
     with data_tabs[5]:

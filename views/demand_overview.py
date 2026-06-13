@@ -286,11 +286,12 @@ def _tab_forecasting():
         seg_ct  = sc_df["segment"].value_counts() if "segment" in sc_df.columns else {}
         st.markdown(
             f'<div class="note-box">'
-            f'Referensi klasifikasi SKU (Ubay): <b>{n_class} SKU</b> tersegmentasi — '
-            f'{seg_ct.get("SMOOTH",0)} Smooth, {seg_ct.get("ERRATIC",0)} Erratic (→ Prophet) | '
-            f'{seg_ct.get("INTERMITTENT",0)} Intermittent (→ CrostonSBA), {seg_ct.get("LUMPY",0)} Lumpy (→ CrostonSBA). '
-            f'Cutoff aktual: <b>{CUTOFF_DATE.strftime("%b %Y")}</b>. '
-            f'Periode forecast: <b>{CUTOFF_DATE.strftime("%b %Y")} – {(CUTOFF_DATE + pd.DateOffset(months=12)).strftime("%b %Y")}</b>.'
+            f'Metode forecast disesuaikan dengan pola permintaan SKU. '
+            f'SKU berpola smooth dan erratic diproses menggunakan Prophet, '
+            f'sedangkan SKU berpola intermittent dan lumpy diproses menggunakan CrostonSBA. '
+            f'Cutoff data aktual: <b>{CUTOFF_DATE.strftime("%b %Y")}</b>. '
+            f'Periode forecast: <b>{CUTOFF_DATE.strftime("%b %Y")} – '
+            f'{(CUTOFF_DATE + pd.DateOffset(months=12)).strftime("%b %Y")}</b>.'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -332,12 +333,39 @@ def _tab_forecasting():
             unsafe_allow_html=True,
         )
 
+    # ── Model tersimpan (bundle) — opsional, dengan fallback otomatis ────────
+    _use_bundle = False
+    try:
+        from modules.forecast_bundle import bundle_status
+        _bs = bundle_status()
+    except Exception:
+        _bs = {"available": False, "error": "Modul bundle tidak tersedia."}
+    if _bs.get("available"):
+        _saved = str(_bs.get("saved_at", ""))[:10]
+        _cut   = str(_bs.get("cutoff", ""))[:10]
+        st.markdown(
+            f'<div class="note-box" style="border-left-color:#088395;">'
+            f'<b>Model tersimpan tersedia.</b> {_bs["n_prophet"]} model Prophet + '
+            f'{_bs["n_croston"]} model CrostonSBA (cutoff {_cut}, disimpan {_saved}). '
+            f'Bila diaktifkan, SKU yang sudah terlatih memakai model ini (lebih cepat); '
+            f'SKU baru atau data yang lebih baru otomatis dilatih ulang.</div>',
+            unsafe_allow_html=True)
+        _use_bundle = st.toggle(
+            "Gunakan model tersimpan bila tersedia (disarankan)",
+            value=True, key="fc_use_bundle",
+            help="Aktif: SKU dalam bundle dipakai langsung (cepat, identik hasil "
+                 "training awal). SKU di luar bundle / data lebih baru tetap "
+                 "dilatih langsung. Nonaktif: semua SKU dilatih langsung.")
+    elif _bs.get("error"):
+        st.caption(f"Model tersimpan tidak dipakai — {_bs['error']}")
+
     btn_disabled = not has_raw
     if st.button("Jalankan Forecast", type="primary", disabled=btn_disabled, key="btn_run_fc"):
         try:
             from modules.forecast_engine import run_forecast
             with st.spinner("Memproses pipeline forecast..."):
-                fc_result = run_forecast(raw_df, horizon_months=horizon, method=method)
+                fc_result = run_forecast(raw_df, horizon_months=horizon, method=method,
+                                         use_bundle=_use_bundle)
             fc_result = _clean_fc(fc_result)
             set_state("forecast_output", fc_result)
             set_state("fc_is_existing", False)   # ini hasil run beneran

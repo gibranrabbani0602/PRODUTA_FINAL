@@ -533,9 +533,15 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
 
     result_df = pd.DataFrame(results)
     if not result_df.empty:
-        result_df = result_df.sort_values(
-            by=["Tons Finished", "Unmet Demand Ton"], ascending=[False, True]
-        ).reset_index(drop=True)
+        # Ranking konsisten dengan Evaluasi Kapasitas (modules/scenario_ranking.py):
+        # produksi desc → unmet asc → efisiensi utilisasi → risiko.
+        from modules.scenario_ranking import scenario_sort_tuple
+        result_df["_sort"] = result_df.apply(lambda r: scenario_sort_tuple(
+            r.get("Tons Finished", 0), r.get("Unmet Demand Ton", 0),
+            r.get("Util Filling B (%)", 0), r.get("Util Filling G (%)", 0),
+            r.get("Util Filling D (%)", 0),
+        ), axis=1)
+        result_df = result_df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
 
     planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
     meta = {"scenarios_evaluated": len(result_df), "holiday_days": len(holiday_set), "products_analyzed": len(forecast_df)}

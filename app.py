@@ -5,7 +5,7 @@ import streamlit as st
 import streamlit.components.v1 as _stc
 from pathlib import Path
 import base64
-from modules.session import init_session, get_state, set_state
+from modules.session import init_session, get_state, set_state, clear_session_data
 
 LOGO        = "assets/lactalis_logo.png"
 LOGO_SQUARE = "assets/lactalis_logo_square.png"
@@ -36,11 +36,14 @@ def _pw_valid(pw):
 
 def _auto_login():
     if get_state("logged_in"): return True
+    # Tidak ada logged_in di session → sesi browser baru
+    # → bersihkan disk cache sesi sebelumnya supaya tidak muncul data lama
     p = Path("data/.session_token")
     if p.exists():
         try:
             ok, uname = verify_session(p.read_text().strip())
             if ok:
+                clear_session_data()   # ← hapus sisa cache sesi lama
                 users = load_users()
                 udata = users.get(uname, {})
                 set_state("logged_in", True)
@@ -175,6 +178,7 @@ def auth_page():
                 else:
                     ok, udata = verify_login(user.strip(), pwd)
                     if ok:
+                        clear_session_data()   # ← login baru → bersihkan cache lama
                         token = create_session(user.strip())
                         Path("data").mkdir(exist_ok=True)
                         Path("data/.session_token").write_text(token)
@@ -217,7 +221,7 @@ _greeting = "Hi, Admin!" if _uname.lower() == "admin" else f"Hi, {_first}!"
 
 sidebar_brand()
 MENUS = ["Analisis Demand", "Simulasi Kapasitas", "Evaluasi Kapasitas",
-         "Alokasi Produksi", "Parameter Investasi"]
+         "Alokasi Produksi", "Parameter & Katalog Investasi"]
 with st.sidebar:
     st.markdown(
         f'<div style="color:#37B7C3;font-size:.86rem;font-weight:600;padding:0 0 10px 2px;">'
@@ -264,8 +268,10 @@ with _tr:
                         save_users(users); st.success("Password diperbarui.")
     with _c2:
         if st.button("Keluar", use_container_width=True, key="btn_logout"):
+            clear_session_data()   # ← logout → bersihkan cache supaya sesi berikutnya bersih
             Path("data/.session_token").unlink(missing_ok=True)
-            set_state("logged_in", False); st.rerun()
+            set_state("logged_in", False)
+            st.rerun()
 
 st.markdown("---")
 

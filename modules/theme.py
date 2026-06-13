@@ -135,6 +135,74 @@ p, li, span, label { color: #071952; }
   border: 1.5px dashed #088395 !important;
 }
 [data-testid="stFileUploaderDropzone"] button { color: #071952 !important; }
+
+/* ── Sidebar contrast fixes: SEMUA teks harus terbaca di bg gelap ── */
+/* Tombol di sidebar (mis. Hapus Data Simulasi) */
+[data-testid="stSidebar"] .stButton button,
+[data-testid="stSidebar"] button[kind="secondary"],
+[data-testid="stSidebar"] button[kind="primary"] {
+  color: #EBF4F6 !important;
+  background: rgba(8,131,149,0.30) !important;
+  border: 1px solid #37B7C3 !important;
+}
+[data-testid="stSidebar"] .stButton button:hover {
+  color: #FFFFFF !important;
+  background: rgba(8,131,149,0.55) !important;
+  border-color: #EBF4F6 !important;
+}
+[data-testid="stSidebar"] .stButton button p,
+[data-testid="stSidebar"] .stButton button span {
+  color: inherit !important;
+}
+/* Alert/success/info/warning di sidebar — semua versi testid */
+[data-testid="stSidebar"] [data-testid="stAlert"],
+[data-testid="stSidebar"] [data-testid="stAlertContainer"],
+[data-testid="stSidebar"] .stAlert {
+  background: rgba(55,183,195,0.18) !important;
+  border: 1px solid #37B7C3 !important;
+  border-radius: 6px !important;
+}
+[data-testid="stSidebar"] [data-testid="stAlert"] p,
+[data-testid="stSidebar"] [data-testid="stAlert"] span,
+[data-testid="stSidebar"] [data-testid="stAlert"] div,
+[data-testid="stSidebar"] [data-testid="stAlertContainer"] p,
+[data-testid="stSidebar"] [data-testid="stAlertContainer"] span,
+[data-testid="stSidebar"] [data-testid="stAlertContainer"] div,
+[data-testid="stSidebar"] .stAlert p {
+  color: #EBF4F6 !important;
+}
+/* File yang sudah ter-upload (nama file + ikon + tombol hapus) */
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"],
+[data-testid="stSidebar"] [data-testid="stFileUploaderFileName"],
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] span,
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] small,
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] div,
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] p {
+  color: #EBF4F6 !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDeleteBtn"] button,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDeleteBtn"] svg {
+  color: #EBF4F6 !important;
+  fill: #EBF4F6 !important;
+}
+/* Label semua jenis input di sidebar */
+[data-testid="stSidebar"] .stNumberInput label,
+[data-testid="stSidebar"] .stMultiSelect label,
+[data-testid="stSidebar"] .stRadio label,
+[data-testid="stSidebar"] .stCheckbox label,
+[data-testid="stSidebar"] .stSlider label,
+[data-testid="stSidebar"] label {
+  color: #EBF4F6 !important;
+}
+/* Caption / small text di sidebar */
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+[data-testid="stSidebar"] small {
+  color: #B8D4D9 !important;
+}
+/* Ikon help (?) di sidebar */
+[data-testid="stSidebar"] svg { fill: #B8D4D9; }
 </style>
 """
 

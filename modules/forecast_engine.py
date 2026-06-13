@@ -346,6 +346,7 @@ def run_forecast(
     method: str = "Auto (Prophet + CrostonSBA)",
     cutoff_date: str | None = None,
     progress_callback=None,
+    use_bundle: bool = True,
 ) -> pd.DataFrame:
     """
     Pipeline forecasting sesuai Ubay:
@@ -433,6 +434,41 @@ def run_forecast(
         mape_bt = wmape_bt = bias_bt = np.nan
         fc_rows  = []
         model_used = None
+
+        # ── JALAN TENGAH: coba model tersimpan (bundle) lebih dulu ───────────
+        # Bila SKU ada di bundle dan datanya tidak lebih baru dari cutoff
+        # bundle, pakai model tersimpan (cepat). Selain itu -> None, lanjut
+        # training langsung di bawah (jaring pengaman, tetap fleksibel).
+        _bundle_hit = None
+        try:
+            from modules.forecast_bundle import predict_from_bundle
+            _bundle_hit = predict_from_bundle(sku, sku_data, horizon_months,
+                                              use_bundle=use_bundle)
+        except Exception:
+            _bundle_hit = None
+        if _bundle_hit is not None:
+            model_used = _bundle_hit["model_used"]
+            _fc = _bundle_hit["forecast"]; _lo = _bundle_hit["lower"]; _hi = _bundle_hit["upper"]
+            for j, fd in enumerate(future_dates):
+                fc_rows.append({
+                    "date":           fd,
+                    "forecast":       round(float(_fc[j]), 6),
+                    "forecast_lower": round(float(_lo[j]), 6),
+                    "forecast_upper": round(float(_hi[j]), 6),
+                })
+            # Metrik backtest diambil dari bundle bila tersedia (opsional);
+            # bila tidak, dibiarkan NaN — tidak memengaruhi angka forecast.
+            status = "OK"
+            for r in fc_rows:
+                results.append({
+                    "date": r["date"], "sku": sku, "description": desc,
+                    "forecast": r["forecast"], "forecast_lower": r["forecast_lower"],
+                    "forecast_upper": r["forecast_upper"],
+                    "mape_backtest": None, "wmape_backtest": None, "bias_pct": None,
+                    "demand_pattern": row["segment"], "model_used": model_used,
+                    "status": status,
+                })
+            continue  # SKU selesai via bundle, lanjut SKU berikutnya
 
         # ── SMOOTH / ERRATIC ─────────────────────────────────────────────────
         if seg in ("SMOOTH","ERRATIC"):

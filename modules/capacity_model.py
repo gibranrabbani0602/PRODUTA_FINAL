@@ -378,19 +378,19 @@ def recommend_options(diag, unmet_demand):
 
 def _ml_comps(qty=1):
     return [
-        {"key":"micro_auger", "qty":6*qty},
-        {"key":"shiputec",    "qty":1*qty},
-        {"key":"inclined_z",  "qty":6*qty},
-        {"key":"multi_strand","qty":1*qty},
+        {"key":"micro_auger",          "qty":6*qty},
+        {"key":"filler_multilane_sss", "qty":1*qty},
+        {"key":"conveyor_z",           "qty":6*qty},
+        {"key":"conveyor_multistrand", "qty":1*qty},
     ]
 
 def _nl_comps():
     return [
-        {"key":"feeder_ams",  "qty":1},
-        {"key":"auger_bgl",   "qty":1},
-        {"key":"wolf_vpc250", "qty":1},
-        {"key":"inclined_z",  "qty":1},
-        {"key":"flat_belt",   "qty":1},
-        {"key":"checkweigher","qty":1},
-        {"key":"xray",        "qty":1},
+        {"key":"feeder_screw",        "qty":1},
+        {"key":"auger_dosing",        "qty":1},
+        {"key":"filler_vertikal_uni", "qty":1},
+        {"key":"conveyor_z",          "qty":1},
+        {"key":"conveyor_belt",       "qty":1},
+        {"key":"checkweigher",        "qty":1},
+        {"key":"xray",                "qty":1},
     ]
