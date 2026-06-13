@@ -19,12 +19,6 @@ html, body, [data-testid="stAppViewContainer"] {
 [data-testid="stSidebar"] * {
   color: #EBF4F6 !important;
 }
-
-[data-testid="stSidebar"] .stButton button,
-[data-testid="stSidebar"] .stButton button * {
-  color: #071952 !important;
-}
-
 [data-testid="stSidebar"] .stRadio label {
   color: #EBF4F6 !important;
 }

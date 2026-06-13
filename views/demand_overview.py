@@ -357,7 +357,10 @@ def _tab_forecasting():
                  "training awal). SKU di luar bundle / data lebih baru tetap "
                  "dilatih langsung. Nonaktif: semua SKU dilatih langsung.")
     elif _bs.get("error"):
-        st.caption(f"Model tersimpan tidak dipakai — {_bs['error']}")
+        # Saat bundle tidak dapat dimuat, sistem otomatis memakai pelatihan
+        # langsung. Pesan teknis tidak relevan bagi pengguna — cukup
+        # informasikan secara ringkas bahwa proses tetap berjalan normal.
+        st.caption("Forecast menggunakan pelatihan langsung pada data yang diunggah.")
 
     btn_disabled = not has_raw
     if st.button("Jalankan Forecast", type="primary", disabled=btn_disabled, key="btn_run_fc"):

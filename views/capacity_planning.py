@@ -110,7 +110,6 @@ def render():
         # hanya karena kolom tidak persis cocok — kehilangan data DES setelah
         # navigasi antar menu sebelumnya berakar dari pembersihan agresif ini.
         def _valid_sim(df):
-<<<<<<< HEAD
             if not isinstance(df, pd.DataFrame) or df.empty: return False
             # Terima jika ada kolom utilisasi dengan nilai > 0 ATAU kolom inti DES ada
             _has_util = any((pd.to_numeric(df[c], errors="coerce").fillna(0) > 0).any()
@@ -127,38 +126,6 @@ def render():
                 st.caption(f"{len(_ses)} skenario aktif dari sesi ini.")
             # Catatan: bila tidak valid, biarkan apa adanya — JANGAN dikosongkan.
             # Pengosongan hanya lewat tombol "Hapus Data Simulasi" di bawah.
-=======
-            if not isinstance(df, pd.DataFrame) or df.empty:
-                return False
-            try:
-                from modules.data_loader import _normalize_sim_columns as _ncols
-                df = _ncols(df.copy())
-            except Exception:
-                df = df.copy()
-        
-            for col in ["Util_Filling_B", "Util_Filling_G", "Util_Filling_D"]:
-                if col in df.columns and (pd.to_numeric(df[col], errors="coerce").fillna(0) > 0).any():
-                    return True
-            return False
-        
-        def _norm_sim(df):
-            if not isinstance(df, pd.DataFrame) or df.empty:
-                return pd.DataFrame()
-            try:
-                from modules.data_loader import _normalize_sim_columns as _ncols
-                return _ncols(df.copy())
-            except Exception:
-                return df.copy()
-        
-        if _valid_sim(_new_file):
-            set_state("simulation_result", _norm_sim(_new_file))
-        else:
-            _ses = get_state("simulation_result")
-            if _valid_sim(_ses):
-                st.caption(f"Data aktif: {len(_ses)} skenario dari sesi ini.")
-            else:
-                st.caption("Belum ada hasil simulasi aktif.")
->>>>>>> 8243594d822753d702a6425a428c0641ef9175d5
 
         if st.button("Hapus Data Simulasi", key="clr_cp",
                      help="Kosongkan data simulasi yang sedang dimuat"):
@@ -282,87 +249,6 @@ def render():
         score = float(compute_fis(umx, ur, fr))
         level, _reasons = _decide_dyn(_util, ur, _util_limits, _util_tol, _unmet_tol)
         severity = fis_severity_label(score)
-<<<<<<< HEAD
-=======
-        # Per-line schedule (new format) or fall back to global (old format)
-        _b_d=float(str(row.get("B_Days") or row.get("Days_Per_Week") or 7).replace(",","") or 7)
-        _b_h=float(str(row.get("B_Hours") or row.get("Working_Hours") or 24).replace(",","") or 24)
-        _g_d=float(str(row.get("G_Days") or row.get("Days_Per_Week") or 7).replace(",","") or 7)
-        _g_h=float(str(row.get("G_Hours") or row.get("Working_Hours") or 24).replace(",","") or 24)
-        _d_d=float(str(row.get("D_Days") or 7).replace(",","") or 7)
-        _d_h=float(str(row.get("D_Hours") or 24).replace(",","") or 24)
-        _bmode=str(row.get("Batch_Mode") or row.get("WO_Mode","")).strip()
-        _growth=str(row.get("Growth","0")).strip()
-        _cap_st=str(row.get("Capacity_Status","")).strip()
-        _plan_st=str(row.get("Planner_Status","")).strip()
-        _btn=str(row.get("Bottleneck_Area","")).strip()
-        _setup_b=float(str(row.get("Setup_Min_B","0")).replace(",","") or 0)
-        _setup_g=float(str(row.get("Setup_Min_G","0")).replace(",","") or 0)
-        _setup_d=float(str(row.get("Setup_Min_D","0")).replace(",","") or 0)
-        _tons_fin=_s(row,"Tons_Finished")
-        _sys_hrs=(_b_d/7*349*_b_h)+(_g_d/7*349*_g_h)+(_d_d/7*349*_d_h)
-        # Format scenario label: "B:7D/24H G:7D/24H D:7D/24H | BLOSS"
-        _label=(
-            f"B:{int(_b_d)}D/{int(_b_h)}H · G:{int(_g_d)}D/{int(_g_h)}H · D:{int(_d_d)}D/{int(_d_h)}H"
-            +(f" | {_bmode}" if _bmode else "")
-            +(f" | G+{_growth}%" if _growth not in ("0","0%","") else "")
-        )
-
-        
-        def _safe_float(value, default=0):
-            try:
-                if value is None:
-                    return float(default)
-                value = str(value).replace("%", "").replace(",", ".").strip()
-                if value == "" or value.lower() in ["none", "nan", "null"]:
-                    return float(default)
-                return float(value)
-            except Exception:
-                return float(default)
-
-        _down_b = _safe_float(row.get("Downtime_B", row.get("Line_B_Downtime_Days_Month", row.get("Line B Downtime Days/Month", 0))), 0)
-        _down_g = _safe_float(row.get("Downtime_G", row.get("Line_G_Downtime_Days_Month", row.get("Line G Downtime Days/Month", 0))), 0)
-        _down_d = _safe_float(row.get("Downtime_D", row.get("Line_D_Downtime_Days_Month", row.get("Line D Downtime Days/Month", 0))), 0)
-
-        _avail_b = _safe_float(row.get("Availability_B", 100), 100)
-        _avail_g = _safe_float(row.get("Availability_G", 100), 100)
-        _avail_d = _safe_float(row.get("Availability_D", 100), 100)
-        _tons_b = _s(row,"Tons_B"); _tons_g = _s(row,"Tons_G"); _tons_d = _s(row,"Tons_D")
-        _tgt_ton = max(_s(row,"Target_Demand_Ton"),1)
-        results.append({
-            "Scenario":   row.get("Scenario_ID","?"),
-            "Label":      _label,
-            "Hari B":     int(_b_d),"Jam B":  int(_b_h),
-            "Hari G":     int(_g_d),"Jam G":  int(_g_h),
-            "Hari D":     int(_d_d),"Jam D":  int(_d_h),
-            "Batch Mode": _bmode,  "Growth":  _growth,
-            "Avail B (%)": round(_avail_b,0),"Avail G (%)": round(_avail_g,0),"Avail D (%)": round(_avail_d,0),
-            "Downtime B":  int(_down_b),"Downtime G":int(_down_g),"Downtime D":int(_down_d),
-            "Target Demand (ton)": round(_tgt_ton,1),
-            "Tons B (ton)": round(_tons_b,1),"Tons G (ton)": round(_tons_g,1),"Tons D (ton)": round(_tons_d,1),
-            "Selesai (%)":round(fr,1),"Unmet (%)": round(ur,1),
-            "Util B (%)": round(ub,1),"Util G (%)":round(ug,1),"Util D (%)":round(ud,1),
-            "Util Max (%)":round(umx,1),
-            "Setup B (mnt)":int(_setup_b),"Setup G (mnt)":int(_setup_g),"Setup D (mnt)":int(_setup_d),
-            "Bottleneck":_btn,"Status Kapasitas":_cap_st,"Status Planner":_plan_st,
-            "Total Produksi (ton)":round(_tons_fin,1),
-            "Skor FIS":   round(score,3),"Keputusan":level,"Severity":severity,
-            "Confidence (%)": round(_conf,1),
-            "Faktor Utama": _top_feat[0][0] if _top_feat else "—",
-            # Backward-compat aliases
-            "Util B":round(ub,1),"Util G":round(ug,1),"Util D":round(ud,1),
-            "Finished %":round(fr,1),"Unmet %":round(ur,1),"Util Max":round(umx,1),
-            "Skor":round(score,3),
-            # Raw simulation columns for display
-            "Target Demand (ton)":round(_s(row,"Target_Demand_Ton"),1),
-            "Produksi Selesai (ton)":round(_tons_fin,1),
-            "Unmet Demand (ton)":round(_s(row,"Unmet_Demand"),1),
-            "Tons B":round(_s(row,"Tons_B"),1),
-            "Tons G":round(_s(row,"Tons_G"),1),
-            "Tons D":round(_s(row,"Tons_D"),1),
-            "_row":row,"_eff_hrs":_sys_hrs,"_total_sys_hrs":_sys_hrs,
-        })
->>>>>>> 8243594d822753d702a6425a428c0641ef9175d5
 
         _bmode  = str(row.get("Batch_Mode") or row.get("WO_Mode","")).strip()
         _growth = str(row.get("Growth","0")).strip()
@@ -463,7 +349,6 @@ def render():
             xaxis=dict(title=""), bargap=0.4)
         st.plotly_chart(fig, use_container_width=True)
 
-<<<<<<< HEAD
     def _tons_chart(tons_by_lid, title="TONASE PER LINI"):
         st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
         fig = go.Figure()
@@ -479,68 +364,6 @@ def render():
 
     # ── TABS ────────────────────────────────────────────────────────────────
     tab_eval, tab_diag = st.tabs(["Evaluasi Skenario", "Diagnosa & Rekomendasi"])
-=======
-        # ── Export & kirim ke Alokasi Produksi untuk skenario MAINTAIN ─────────
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>EXPORT KAPASITAS</div>", unsafe_allow_html=True)
-
-        import io as _io_exp
-        import re as _re_exp
-
-        _maintain_data = {
-            "Scenario": str(sel_mrow.get("Scenario", sel_mrow.get("Label", "MAINTAIN"))),
-
-            "B_Days": int(sel_mrow.get("Hari B", 7)),
-            "B_Hours": int(sel_mrow.get("Jam B", 24)),
-            "G_Days": int(sel_mrow.get("Hari G", 7)),
-            "G_Hours": int(sel_mrow.get("Jam G", 24)),
-            "D_Days": int(sel_mrow.get("Hari D", 7)),
-            "D_Hours": int(sel_mrow.get("Jam D", 24)),
-
-            "Batch_Mode": str(sel_mrow.get("Batch Mode", "")),
-            "Growth": str(sel_mrow.get("Growth", "0")),
-
-            "Tons_B": float(sel_mrow.get("Tons B (ton)", sel_mrow.get("Tons B", 0))),
-            "Util_B": float(sel_mrow.get("Util B (%)", sel_mrow.get("Util B", 0))),
-            "Line_B_Type": "SSS+BIB",
-            "Line_B_Config": "single",
-
-            "Tons_G": float(sel_mrow.get("Tons G (ton)", sel_mrow.get("Tons G", 0))),
-            "Util_G": float(sel_mrow.get("Util G (%)", sel_mrow.get("Util G", 0))),
-            "Line_G_Type": "SSS+BIB",
-            "Line_G_Config": "single",
-
-            "Tons_D": float(sel_mrow.get("Tons D (ton)", sel_mrow.get("Tons D", 0))),
-            "Util_D": float(sel_mrow.get("Util D (%)", sel_mrow.get("Util D", 0))),
-            "Line_D_Type": "SSS",
-            "Line_D_Config": "multiline",
-        }
-
-        _cap_df = pd.DataFrame([_maintain_data])
-        _csv_text = _cap_df.to_csv(index=False)
-        _safe_name = _re_exp.sub(r"[^A-Za-z0-9_-]+", "_", _maintain_data["Scenario"])[:80]
-        _file_name = f"kapasitas_{_safe_name}_maintain.csv"
-
-        # Simpan ke session agar otomatis terbaca di menu Alokasi Produksi
-        set_("_cap_bytes", _csv_text.encode("utf-8"))
-        set_("_cap_name", _file_name)
-
-        st.success("Data kapasitas siap digunakan di menu Alokasi Produksi.")
-        st.download_button(
-            "⬇ Export Kapasitas",
-            data=_csv_text,
-            file_name=_file_name,
-            mime="text/csv",
-            help="Download data kapasitas untuk digunakan di menu Alokasi Produksi.",
-            key="dl_capacity_maintain",
-        )
-
-        if n_mod == 0:
-            st.stop()   # semua MAINTAIN: tidak ada DIAGNOSA yang perlu ditampilkan
-        
-    # ═══ SECTION 2: DIAGNOSA & OPSI ══════════════════════════════════════════════
-    st.markdown('<div class="section-title">Diagnosa Bottleneck & Rekomendasi</div>',unsafe_allow_html=True)
->>>>>>> 8243594d822753d702a6425a428c0641ef9175d5
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — EVALUASI SKENARIO
@@ -622,7 +445,6 @@ def render():
             index=0, key="cp_t1_sel_idx")
         st.session_state["cp_diag_sel"] = rank_df.iloc[_t1_sel_idx]["Scenario"]
 
-<<<<<<< HEAD
         _sm = rank_df.iloc[_t1_sel_idx]
         _sm_util = {lid: float(_sm.get(f"Util {lid} (%)", 0)) for lid in _lids}
         _sm_tons = {lid: float(_sm.get(f"Tons {lid} (ton)", 0)) for lid in _lids}
@@ -1543,59 +1365,3 @@ def render():
                     st.caption("Rincian langkah perhitungan tiap rekomendasi tersedia pada "
                                "Transparansi Perhitungan di atas. Seluruh parameter mengikuti "
                                "menu Parameter & Katalog Investasi.")
-=======
-    # ── Export Kapasitas (paling bawah) ──────────────────────────────────────────
-    st.markdown("<br>", unsafe_allow_html=True)
-    import io as _io_exp
-    # Determine config: D is always multiline, B/G depend on option
-    _cfg_b = "multiline" if sel_opt_id in ("multiline_B","multiline_BG","multiline_BG_new") else "single"
-    _cfg_g = "multiline" if sel_opt_id in ("multiline_G","multiline_BG","multiline_BG_new") else "single"
-    _post_data = {
-        "Scenario": sel_id,
-        # Per-line schedule (for Perencanaan Produksi input)
-        "B_Days": int(_s(sel_orig,"B_Days",_s(sel_orig,"Days_Per_Week",7))),
-        "B_Hours": int(_s(sel_orig,"B_Hours",_s(sel_orig,"Working_Hours",24))),
-        "G_Days": int(_s(sel_orig,"G_Days",_s(sel_orig,"Days_Per_Week",7))),
-        "G_Hours": int(_s(sel_orig,"G_Hours",_s(sel_orig,"Working_Hours",24))),
-        "D_Days": int(_s(sel_orig,"D_Days",7)),
-        "D_Hours": int(_s(sel_orig,"D_Hours",24)),
-        "Batch_Mode": str(sel_orig.get("Batch_Mode",sel_orig.get("WO_Mode",""))).strip(),
-        "Growth": str(sel_orig.get("Growth","0")).strip(),
-        # Post-upgrade capacity per lini
-        "Tons_B": upd["Tons_B_new"], "Util_B": upd["Util_Filling_B_new"],
-        "Line_B_Type":"SSS+BIB",    "Line_B_Config": _cfg_b,
-        "Tons_G": upd["Tons_G_new"], "Util_G": upd["Util_Filling_G_new"],
-        "Line_G_Type":"SSS+BIB",    "Line_G_Config": _cfg_g,
-        "Tons_D": upd["Tons_D_new"], "Util_D": upd["Util_Filling_D_new"],
-        "Line_D_Type":"SSS",         "Line_D_Config": "multiline",
-    }
-    if "Tons_C_new" in upd or _involves_new_line:
-        _post_data.update({
-            "C_Days": new_line_days if _involves_new_line else 7,
-            "C_Hours": new_line_hrs if _involves_new_line else 24,
-            "Tons_C": upd.get("Tons_C_new",0),
-            "Util_C": upd.get("Util_Filling_C_new",0),
-            "Line_C_Type": "SSS+BIB",
-            "Line_C_Config": "single"
-        })
-    
-    _csv_buf = _io_exp.StringIO()
-    pd.DataFrame([_post_data]).to_csv(_csv_buf, index=False)
-
-    _file_name = f"kapasitas_{sel_id}_{sel_opt_id}.csv"
-    _csv_text = _csv_buf.getvalue()
-
-    # Simpan ke session agar otomatis terbaca di menu Alokasi Produksi
-    set_("_cap_bytes", _csv_text.encode("utf-8"))
-    set_("_cap_name", _file_name)
-
-    st.success("Data kapasitas post-rekomendasi siap digunakan di menu Alokasi Produksi.")
-
-    st.download_button(
-        "⬇ Export Kapasitas",
-        data=_csv_text,
-        file_name=_file_name,
-        mime="text/csv",
-        help="Download data kapasitas post-rekomendasi untuk digunakan di Perencanaan Produksi."
-    )
->>>>>>> 8243594d822753d702a6425a428c0641ef9175d5

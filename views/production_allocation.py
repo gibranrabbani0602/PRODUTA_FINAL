@@ -131,22 +131,99 @@ def render():
     st.markdown('<div class="section-title">2. Produk yang Ditambahkan</div>',
                 unsafe_allow_html=True)
     st.caption("Daftar produk (eksternal maupun produk baru) yang akan dialokasikan "
-               "ke kapasitas internal. Tambah baris sesuai kebutuhan.")
+               "ke kapasitas internal.")
+
+    _src = st.radio("Sumber data produk:", ["Isi manual", "Unggah file"],
+                    horizontal=True, key="pa_prod_src")
+
+    # Pembacaan kolom yang fleksibel — mengenali berbagai gaya penamaan judul
+    def _match_col(cols, *aliases):
+        _norm = {str(c).strip().lower().replace("_", " ").replace("-", " "): c for c in cols}
+        for a in aliases:
+            if a in _norm:
+                return _norm[a]
+        # pencocokan longgar: judul mengandung salah satu alias
+        for key, orig in _norm.items():
+            for a in aliases:
+                if a in key:
+                    return orig
+        return None
 
     _df_init = pd.DataFrame([
         {"Kode SKU": "SKU-001", "Nama Produk": "", "Format": formats[0] if formats else "",
          "Tonase (ton/bln)": 50.0},
     ])
-    sku_df = st.data_editor(
-        _df_init, num_rows="dynamic", use_container_width=True, key="pa_sku_editor",
-        column_config={
-            "Kode SKU": st.column_config.TextColumn(required=True),
-            "Nama Produk": st.column_config.TextColumn(help="Opsional"),
-            "Format": st.column_config.SelectboxColumn(options=formats, required=True),
-            "Tonase (ton/bln)": st.column_config.NumberColumn(
-                min_value=0.0, format="%.1f", required=True),
-        })
+
+    if _src == "Unggah file":
+        st.caption("Unggah file CSV atau Excel berisi kolom: kode produk, jenis "
+                   "kemasan, dan tonase per bulan. Nama produk bersifat opsional. "
+                   "Judul kolom dikenali secara fleksibel.")
+        _up = st.file_uploader("Berkas produk", type=["csv", "xlsx", "xls"],
+                               key="pa_prod_file")
+        if _up is None:
+            st.info("Unggah berkas, atau beralih ke pengisian manual.")
+            return
+        try:
+            if _up.name.lower().endswith(("xlsx", "xls")):
+                _raw = pd.read_excel(_up)
+            else:
+                _raw = pd.read_csv(_up)
+        except Exception as e:
+            st.error(f"Berkas tidak dapat dibaca: {e}")
+            return
+
+        _c_sku = _match_col(_raw.columns, "kode sku", "sku id", "kode produk",
+                            "product code", "sku", "kode", "id produk", "material")
+        _c_nm  = _match_col(_raw.columns, "nama produk", "nama", "product name",
+                            "deskripsi", "description", "nama sku")
+        _c_fmt = _match_col(_raw.columns, "format", "jenis kemasan", "kemasan",
+                            "format kemasan", "packaging", "tipe kemasan", "port")
+        _c_ton = _match_col(_raw.columns, "tonase per bulan", "tonase", "ton/bln",
+                            "ton per bulan", "volume", "tonnage", "demand", "tonase (ton/bln)")
+
+        if _c_sku is None or _c_ton is None:
+            st.error("Kolom kode produk dan tonase wajib ada. "
+                     f"Kolom terbaca: {', '.join(str(c) for c in _raw.columns)}")
+            return
+
+        _norm_rows = []
+        for _, r in _raw.iterrows():
+            _fmt_raw = str(r.get(_c_fmt, "")).strip().upper() if _c_fmt else ""
+            # Cocokkan format ke master; jika tak cocok, biarkan apa adanya
+            _fmt_val = next((f for f in formats if f.upper() == _fmt_raw),
+                            (_fmt_raw or (formats[0] if formats else "")))
+            _norm_rows.append({
+                "Kode SKU": str(r.get(_c_sku, "")).strip(),
+                "Nama Produk": str(r.get(_c_nm, "")).strip() if _c_nm else "",
+                "Format": _fmt_val,
+                "Tonase (ton/bln)": pd.to_numeric(r.get(_c_ton), errors="coerce"),
+            })
+        _df_loaded = pd.DataFrame(_norm_rows)
+        st.success(f"{len(_df_loaded)} baris terbaca. Periksa dan sesuaikan bila perlu.")
+        sku_df = st.data_editor(
+            _df_loaded, num_rows="dynamic", use_container_width=True,
+            key="pa_sku_editor_up",
+            column_config={
+                "Kode SKU": st.column_config.TextColumn(required=True),
+                "Nama Produk": st.column_config.TextColumn(help="Opsional"),
+                "Format": st.column_config.SelectboxColumn(options=formats, required=True),
+                "Tonase (ton/bln)": st.column_config.NumberColumn(
+                    min_value=0.0, format="%.1f", required=True),
+            })
+    else:
+        st.caption("Tambah baris sesuai kebutuhan.")
+        sku_df = st.data_editor(
+            _df_init, num_rows="dynamic", use_container_width=True, key="pa_sku_editor",
+            column_config={
+                "Kode SKU": st.column_config.TextColumn(required=True),
+                "Nama Produk": st.column_config.TextColumn(help="Opsional"),
+                "Format": st.column_config.SelectboxColumn(options=formats, required=True),
+                "Tonase (ton/bln)": st.column_config.NumberColumn(
+                    min_value=0.0, format="%.1f", required=True),
+            })
+
     sku_df = sku_df.dropna(subset=["Kode SKU"])
+    sku_df = sku_df[sku_df["Kode SKU"].astype(str).str.strip() != ""]
     sku_df = sku_df[pd.to_numeric(sku_df["Tonase (ton/bln)"], errors="coerce").fillna(0) > 0]
 
     if sku_df.empty or not lines:
