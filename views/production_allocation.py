@@ -48,6 +48,15 @@ def render():
     params.update(cat.get("global_params", {}))
     params["calc_config"] = cat.get("calc_config", {})
     _ccfg      = params["calc_config"]
+    # Rendemen proses pada kapasitas efektif (opsional, default nonaktif) —
+    # konsisten dengan menu Evaluasi Kapasitas.
+    _yield_on  = bool(_ccfg.get("apply_yield_to_capacity", False))
+    _cap_yield = (float(cat.get("global_params", {}).get("effective_yield_pct", 98.0))
+                  / 100.0) if _yield_on else 1.0
+    if _yield_on:
+        st.info(f"Kapasitas dihitung pada basis produk jadi (rendemen proses "
+                f"{_cap_yield*100:.1f}%). Dapat dinonaktifkan di Parameter & "
+                f"Katalog Investasi.")
 
     # ════════════════════════════════════════════════════════════════════
     # LANGKAH 1 — KONFIGURASI LINI EXISTING
@@ -71,25 +80,49 @@ def render():
             help="Tonase dan utilisasi awal merepresentasikan beban produksi "
                  "selama rentang waktu ini.")
 
-    # Deteksi lini dari data simulasi bila dipilih
+    # Deteksi lini dari data simulasi bila dipilih (normalisasi kolom dulu,
+    # agar cocok dengan berbagai format hasil DES — sama seperti Evaluasi Kapasitas)
     _detected = []
     if _src.startswith("Dari") and _has_sim:
-        _row = _sim.iloc[0]
-        for _col in _sim.columns:
-            if _col.startswith("Util_Filling_"):
-                _lid = _col.replace("Util_Filling_", "")
-                _ton_col = f"Tons_{_lid}"
+        try:
+            from modules.data_loader import _normalize_sim_columns as _ncols
+            _simn = _ncols(_sim.copy())
+        except Exception:
+            _simn = _sim.copy()
+        _row = _simn.iloc[0]
+        for _col in _simn.columns:
+            _cs = str(_col)
+            # terima "Util_Filling_X" maupun varian lain yang mengandung Util+Filling
+            if "Util" in _cs and "Filling" in _cs:
+                _lid = (_cs.replace("Util_Filling_", "")
+                           .replace("Util Filling ", "").replace(" (%)", "")
+                           .replace("Util", "").replace("Filling", "").strip(" _"))
+                if not _lid:
+                    continue
                 _util = float(pd.to_numeric(pd.Series([_row.get(_col, 0)]),
                                             errors="coerce").fillna(0).iloc[0])
-                _tons = float(pd.to_numeric(pd.Series([_row.get(_ton_col, 0)]),
-                                            errors="coerce").fillna(0).iloc[0])
+                # cari kolom tonase yang cocok untuk lini ini
+                _tons = 0.0
+                for _tc in _simn.columns:
+                    _tcs = str(_tc)
+                    if _tcs in (f"Tons_{_lid}", f"Tons {_lid}") or \
+                       (("Tons" in _tcs or "Tonase" in _tcs) and _lid in _tcs):
+                        _tons = float(pd.to_numeric(pd.Series([_row.get(_tc, 0)]),
+                                                    errors="coerce").fillna(0).iloc[0])
+                        break
                 if _util > 0:
                     _detected.append({"id": _lid, "util": round(_util, 1),
-                                      "tons_m": round(_tons / _horizon, 1)})
+                                      "tons_m": round(_tons / _horizon, 1) if _tons else 0.0})
         if _detected:
-            st.caption(f"Terdeteksi {len(_detected)} lini dari skenario peringkat "
-                       f"teratas: {', '.join('Line ' + d['id'] for d in _detected)}. "
-                       f"Tonase dikonversi ke basis bulanan (horizon {_horizon} bulan).")
+            st.success(f"Terhubung dengan Evaluasi Kapasitas: {len(_detected)} lini "
+                       f"terdeteksi dari skenario terbaik "
+                       f"({', '.join('Line ' + d['id'] for d in _detected)}). "
+                       f"Utilisasi dan tonase awal terisi otomatis; tonase dikonversi "
+                       f"ke basis bulanan (horizon {_horizon} bulan).")
+        else:
+            st.warning("Data simulasi terdeteksi namun kolom lini tidak dapat dibaca. "
+                       "Gunakan input manual, atau jalankan ulang simulasi di Evaluasi "
+                       "Kapasitas.")
 
     _n_default = len(_detected) if _detected else 3
     _n_lines = st.number_input("Jumlah lini existing", 1, 12, _n_default, 1, key="pa_nl")
@@ -113,8 +146,9 @@ def render():
                         float(_det.get("tons_m", 200.0)), 5.0, key=f"pa_tn_{idx}")
                     _lim = st.number_input("Batas utilisasi (%)", 50.0, 100.0,
                         _default_limit(_lt), 0.5, key=f"pa_lim_{idx}")
-                    _cap = (_tn / (_ut / 100.0)) if _ut > 0 else 0.0
-                    st.caption(f"Kapasitas tersirat: **{_cap:,.0f} ton/bln** "
+                    _cap = ((_tn / (_ut / 100.0)) if _ut > 0 else 0.0) * _cap_yield
+                    _cap_note = (" (basis produk jadi)" if _yield_on else "")
+                    st.caption(f"Kapasitas tersirat: **{_cap:,.0f} ton/bln**{_cap_note} "
                                f"(tonase \u00f7 utilisasi)")
                     lines.append({"id": _lid.strip() or chr(65 + idx), "type": _lt,
                                   "formats": _fm, "util": _ut, "tons": _tn,
@@ -405,7 +439,7 @@ def render():
         if mm.get("role") != "Filling": continue
         _mf = set(mm.get("format_compat", []))
         if _fmt_need and not set(_fmt_need).issubset(_mf): continue
-        _cap = float(mm.get("capacity_ton_month", 0) or 0)
+        _cap = float(mm.get("capacity_ton_month", 0) or 0) * _cap_yield
         if _cap > 0: _fcands.append((mk, mm, _cap))
     if not _fcands:
         st.warning(f"Tidak ada filler pada katalog yang mendukung format "

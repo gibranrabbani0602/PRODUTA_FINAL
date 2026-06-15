@@ -29,6 +29,135 @@ def save_catalog(cat):
         json.dump(cat, f, indent=2, ensure_ascii=True)
 
 
+def _render_bpd(line_type, flow, by_role, yields, bfd, size="Sedang"):
+    """Block Flow Diagram vertikal dengan neraca massa per batch.
+    Blok konteks hulu/hilir (di luar lingkup) + tahap filling terperinci.
+    Tiap tahap menerapkan rendemen; susut ditampilkan ke kanan, kuantitas
+    yang diteruskan tampil di tiap blok. Ukuran dapat disesuaikan."""
+    import html as _html
+
+    basis = float(bfd.get("basis_kg", 1000))
+    up_lab = bfd.get("upstream_label", "Blending")
+    up_note = bfd.get("upstream_note", "")
+    dn_lab = bfd.get("downstream_label", "Packing")
+    dn_note = bfd.get("downstream_note", "")
+
+    NAVY, TEAL, CYAN, MIST = "#071952", "#088395", "#37B7C3", "#EBF4F6"
+    GREY = "#9aa6b2"
+
+    # Lebar tampilan akhir (max-width) mengikuti pilihan ukuran
+    MAXW = {"Kecil": 380, "Sedang": 520, "Besar": 680}.get(size, 520)
+
+    # Geometri internal (viewBox) — ramping, garis tipis, aksen halus
+    BW, BH = 260, 44
+    CH = 40
+    VGAP = 26
+    LEFT, TOPP = 8, 10
+    LOSS_X = LEFT + BW + 16
+    width = LOSS_X + 130
+    n_proc = len(flow)
+    height = TOPP + (CH + VGAP) + n_proc * (BH + VGAP) + CH + 12
+
+    svg = [f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+           f'style="width:100%;height:auto;font-family:inherit;">']
+    svg.append(f'<defs><marker id="av" markerWidth="8" markerHeight="8" refX="3" '
+               f'refY="5" orient="auto"><path d="M0,0 L6,0 L3,5 Z" fill="{TEAL}"/>'
+               f'</marker><marker id="al" markerWidth="8" markerHeight="8" refX="5" '
+               f'refY="3" orient="auto"><path d="M0,0 L5,3 L0,6 Z" fill="{GREY}"/>'
+               f'</marker></defs>')
+
+    cx_mid = LEFT + BW / 2
+    y = TOPP
+
+    def varrow(y0, y1, label=None):
+        svg.append(f'<line x1="{cx_mid}" y1="{y0}" x2="{cx_mid}" y2="{y1-1}" '
+                   f'stroke="{TEAL}" stroke-width="1.3" marker-end="url(#av)"/>')
+        if label:
+            svg.append(f'<text x="{cx_mid+7}" y="{(y0+y1)/2+3}" font-size="8.5" '
+                       f'fill="{NAVY}">{label}</text>')
+
+    # ── Blok konteks hulu (di luar lingkup) ──────────────────────────────
+    svg.append(f'<rect x="{LEFT}" y="{y}" width="{BW}" height="{CH}" rx="6" '
+               f'fill="{MIST}" stroke="{CYAN}" stroke-width="1" '
+               f'stroke-dasharray="4 3"/>')
+    svg.append(f'<text x="{cx_mid}" y="{y+17}" text-anchor="middle" font-size="11" '
+               f'font-weight="700" fill="{NAVY}">{_html.escape(up_lab)}</text>')
+    svg.append(f'<text x="{cx_mid}" y="{y+30}" text-anchor="middle" font-size="7.5" '
+               f'fill="{GREY}">di luar lingkup &middot; {_html.escape(up_note)}</text>')
+    y += CH
+    varrow(y, y + VGAP, f"masuk {basis:,.0f} kg/batch")
+    y += VGAP
+
+    # ── Tahap filling (dalam lingkup) — neraca massa berjalan ────────────
+    flow_kg = basis
+    total_loss = 0.0
+    for i, stg in enumerate(flow):
+        yld = float(yields.get(stg, 99.5)) / 100.0
+        out_kg = flow_kg * yld
+        loss = flow_kg - out_kg
+        total_loss += loss
+        svg.append(f'<rect x="{LEFT}" y="{y}" width="{BW}" height="{BH}" rx="6" '
+                   f'fill="#FFFFFF" stroke="{TEAL}" stroke-width="1.2"/>')
+        # nomor tahap — lingkaran kecil, garis tipis (tidak mencolok)
+        svg.append(f'<circle cx="{LEFT+14}" cy="{y+BH/2}" r="8" fill="none" '
+                   f'stroke="{TEAL}" stroke-width="1.2"/>'
+                   f'<text x="{LEFT+14}" y="{y+BH/2+3}" text-anchor="middle" '
+                   f'font-size="9" fill="{TEAL}" font-weight="700">{i+1}</text>')
+        svg.append(f'<text x="{LEFT+30}" y="{y+BH/2-2}" font-size="11" '
+                   f'font-weight="700" fill="{NAVY}">{_html.escape(stg)}</text>')
+        names = by_role.get(stg, [])
+        if names:
+            t = _html.escape(names[0])
+            if len(names) > 1: t += f" +{len(names)-1}"
+            if len(t) > 32: t = t[:30] + "…"
+            mtxt = t
+        else:
+            mtxt = "belum ada mesin"
+        svg.append(f'<text x="{LEFT+30}" y="{y+BH/2+11}" font-size="7.5" '
+                   f'fill="{GREY}">{mtxt}</text>')
+        svg.append(f'<text x="{LEFT+BW-8}" y="{y+BH/2+3}" text-anchor="end" '
+                   f'font-size="9" font-weight="700" fill="{TEAL}">'
+                   f'{out_kg:,.1f} kg</text>')
+        if loss > 0.05:
+            ly = y + BH / 2
+            svg.append(f'<line x1="{LEFT+BW}" y1="{ly}" x2="{LOSS_X-1}" y2="{ly}" '
+                       f'stroke="{GREY}" stroke-width="1" stroke-dasharray="2 2" '
+                       f'marker-end="url(#al)"/>')
+            svg.append(f'<text x="{LOSS_X+3}" y="{ly-1}" font-size="8" fill="{GREY}">'
+                       f'susut {loss:,.1f} kg</text>')
+            svg.append(f'<text x="{LOSS_X+3}" y="{ly+8}" font-size="6.5" '
+                       f'fill="#bcc5cf">rendemen {yld*100:.1f}%</text>')
+        flow_kg = out_kg
+        y += BH
+        varrow(y, y + VGAP)
+        y += VGAP
+
+    # ── Blok konteks hilir (di luar lingkup) ─────────────────────────────
+    svg.append(f'<rect x="{LEFT}" y="{y}" width="{BW}" height="{CH}" rx="6" '
+               f'fill="{MIST}" stroke="{CYAN}" stroke-width="1" '
+               f'stroke-dasharray="4 3"/>')
+    svg.append(f'<text x="{cx_mid}" y="{y+17}" text-anchor="middle" font-size="11" '
+               f'font-weight="700" fill="{NAVY}">{_html.escape(dn_lab)}</text>')
+    svg.append(f'<text x="{cx_mid}" y="{y+30}" text-anchor="middle" font-size="7.5" '
+               f'fill="{GREY}">di luar lingkup &middot; {_html.escape(dn_note)}</text>')
+    svg.append('</svg>')
+
+    # Bungkus dengan max-width agar ukuran terkendali dan menyatu dengan menu
+    st.markdown(f'<div style="max-width:{MAXW}px;margin:4px 0;">'
+                f'{"".join(svg)}</div>', unsafe_allow_html=True)
+
+    overall = (flow_kg / basis * 100) if basis else 0
+    st.markdown(
+        f'<div style="max-width:{MAXW}px;background:#F4FBFC;border:1px solid #d5e8ec;'
+        f'border-radius:6px;padding:7px 11px;font-size:.8rem;color:#071952;">'
+        f'<b>Neraca massa lini {_html.escape(line_type)}</b> (per batch): '
+        f'masuk {basis:,.0f} kg &rarr; keluar <b>{flow_kg:,.1f} kg</b> '
+        f'&middot; susut {total_loss:,.1f} kg &middot; '
+        f'rendemen total <b>{overall:.1f}%</b></div>', unsafe_allow_html=True)
+    st.caption("Lingkup analisis: lini filling. Tahap hulu dan hilir adalah "
+               "konteks. Rendemen tiap tahap dapat diatur di atas.")
+
+
 def render():
     st.markdown('<div class="page-title">PARAMETER & KATALOG INVESTASI</div>',
                 unsafe_allow_html=True)
@@ -337,6 +466,70 @@ def render():
                     bp[_new_lt.strip()] = list(categories)
                     save_catalog(cat); st.rerun()
 
+        # ── BLOCK FLOW DIAGRAM (NERACA MASSA) ────────────────────────────
+        st.markdown("---")
+        st.markdown("**DIAGRAM ALIR PROSES (NERACA MASSA)**")
+        st.caption("Alur proses lini filling beserta neraca massa per batch. "
+                   "Lingkup analisis adalah lini filling; tahap hulu (blending) "
+                   "dan hilir (packing) ditampilkan sebagai konteks. Urutan tahap "
+                   "mengikuti Alur Komponen di atas.")
+
+        _bfd = cat.setdefault("bfd_config", {})
+        _bfd.setdefault("basis_kg", 1000)
+        _bfd.setdefault("upstream_label", "Blending")
+        _bfd.setdefault("upstream_note", "Bubuk siap isi, per bin maks 1 ton")
+        _bfd.setdefault("downstream_label", "Packing")
+        _bfd.setdefault("downstream_note", "Pengemasan sekunder")
+        _yields = cat.setdefault("stage_yields", {})
+        _DEF_Y = {"Discharging":99.7,"Feeding":99.8,"Dosing":99.5,"Filling":99.5,
+                  "Transfer":99.9,"Folding":99.8,"Inspeksi":99.5,"Packing":99.7}
+        for _c in categories:
+            _yields.setdefault(_c, _DEF_Y.get(_c, 99.5))
+
+        _bcol1, _bcol2, _bcol3 = st.columns([1, 1, 1])
+        with _bcol1:
+            _bpd_lt = st.selectbox("Tipe lini", line_types, key="bpd_lt")
+        with _bcol2:
+            _bfd["basis_kg"] = st.number_input("Basis input per batch (kg)",
+                100, 5000, int(_bfd.get("basis_kg", 1000)), 50, key="bfd_basis",
+                help="Kapasitas satu bin / basis satu batch produksi. Default 1 ton.")
+        with _bcol3:
+            _bpd_size = st.select_slider("Ukuran diagram",
+                options=["Kecil", "Sedang", "Besar"], value="Sedang", key="bpd_size")
+
+        with st.expander("Rendemen per tahap & label konteks (editable)"):
+            st.caption("Rendemen = persen material yang diteruskan ke tahap "
+                       "berikutnya; sisanya adalah susut (debu, tumpahan, reject). "
+                       "Nilai awal merupakan estimasi dan dapat dikalibrasi.")
+            _yc = st.columns(3)
+            for _i, _c in enumerate([c for c in categories]):
+                with _yc[_i % 3]:
+                    _yields[_c] = st.number_input(f"{_c} (%)", 80.0, 100.0,
+                        float(_yields.get(_c, 99.5)), 0.1, key=f"yld_{_c}")
+            st.markdown("---")
+            _ctx1, _ctx2 = st.columns(2)
+            with _ctx1:
+                _bfd["upstream_label"] = st.text_input("Label hulu (konteks)",
+                    _bfd.get("upstream_label","Blending"), key="bfd_up")
+                _bfd["upstream_note"] = st.text_input("Keterangan hulu",
+                    _bfd.get("upstream_note",""), key="bfd_upn")
+            with _ctx2:
+                _bfd["downstream_label"] = st.text_input("Label hilir (konteks)",
+                    _bfd.get("downstream_label","Packing"), key="bfd_dn")
+                _bfd["downstream_note"] = st.text_input("Keterangan hilir",
+                    _bfd.get("downstream_note",""), key="bfd_dnn")
+
+        _flow = [c for c in bp.get(_bpd_lt, []) if c in categories]
+        if not _flow:
+            st.info("Atur alur komponen untuk tipe lini ini terlebih dahulu.")
+        else:
+            _by_role = {}
+            for _mk, _mm in machines.items():
+                _by_role.setdefault(_mm.get("role", ""), []).append(
+                    _mm.get("full_name", _mk))
+            _render_bpd(_bpd_lt, _flow, _by_role, _yields, _bfd, _bpd_size)
+
+
         if st.button("Simpan Paket & Alur", type="primary", key="save_iv"):
             save_catalog(cat); st.success("Paket investasi dan alur lini disimpan.")
 
@@ -485,15 +678,58 @@ def render():
 
         with pc2:
             with st.container(border=True):
+                st.markdown("**Harga Pokok Produksi (HPP) per Ton**")
+                st.caption("Metode full costing: bahan baku langsung + tenaga kerja "
+                           "langsung + overhead pabrik. Nilai awal mengikuti acuan "
+                           "harga komoditas dan upah publik, dan dapat dikalibrasi.")
+                _hpp = gp.setdefault("hpp", {})
+                _hpp["bahan_baku"] = st.number_input(
+                    "Bahan Baku Langsung per Ton (Rp)",
+                    0, 200_000_000, int(_hpp.get("bahan_baku", 58_000_000)),
+                    1_000_000, format="%d", key="hpp_bb",
+                    help="Acuan: harga rata-rata susu bubuk pasar global "
+                         "(Whole Milk Powder USD 3.400–4.675/ton, GlobalDairyTrade/USDA 2025) "
+                         "dikalikan kurs. Sesuaikan dengan data internal bila tersedia.")
+                _hpp["tkl"] = st.number_input(
+                    "Tenaga Kerja Langsung per Ton (Rp)",
+                    0, 50_000_000, int(_hpp.get("tkl", 8_500_000)),
+                    500_000, format="%d", key="hpp_tkl",
+                    help="Acuan: jumlah operator dikalikan upah minimum regional "
+                         "Bekasi per satuan output.")
+                _hpp["overhead"] = st.number_input(
+                    "Overhead Pabrik per Ton (Rp)",
+                    0, 80_000_000, int(_hpp.get("overhead", 18_800_000)),
+                    500_000, format="%d", key="hpp_ovh",
+                    help="Energi, uap, perawatan, depresiasi, dan pengendalian mutu.")
+                _hpp_total = (_hpp["bahan_baku"] + _hpp["tkl"] + _hpp["overhead"])
+                _hpp["total"] = _hpp_total
+                _bb_pct = (_hpp["bahan_baku"] / _hpp_total * 100) if _hpp_total else 0
+                st.markdown(
+                    f'<div style="background:#EBF4F6;border-radius:6px;padding:8px 12px;'
+                    f'margin-top:4px;font-size:.84rem;color:#071952;">'
+                    f'<b>HPP Total: {fmt_rp(_hpp_total)}/ton</b><br>'
+                    f'<span style="font-size:.76rem;color:#088395;">Komposisi: '
+                    f'bahan baku {_bb_pct:.0f}% &middot; '
+                    f'tenaga kerja {(_hpp["tkl"]/_hpp_total*100) if _hpp_total else 0:.0f}% '
+                    f'&middot; overhead {(_hpp["overhead"]/_hpp_total*100) if _hpp_total else 0:.0f}%'
+                    f'</span></div>', unsafe_allow_html=True)
+                st.caption("Nilai awal merupakan estimasi berbasis acuan publik dan "
+                           "dapat disesuaikan ke data perusahaan.")
+
+            with st.container(border=True):
                 st.markdown("**Nilai Manfaat**")
-                st.caption("Dasar penilaian manfaat ekonomis kapasitas tambahan, "
-                           "berlaku untuk seluruh jenis investasi.")
+                st.caption("Margin kontribusi per ton kapasitas tambahan — selisih "
+                           "antara nilai jual dan biaya produksi (HPP). Menjadi dasar "
+                           "penilaian manfaat seluruh jenis investasi.")
                 gp["internal_value_per_ton"] = st.number_input(
                     "Nilai Manfaat per Ton (Rp)",
                     500_000, 10_000_000, int(gp.get("internal_value_per_ton",2_100_000)),
                     100_000, format="%d", key="gp_ivt",
-                    help="Margin kontribusi per ton kapasitas tambahan yang terserap. "
-                         "Referensi internal perusahaan.")
+                    help="Margin kontribusi per ton kapasitas tambahan yang terserap.")
+                if _hpp_total:
+                    _mc_pct = gp["internal_value_per_ton"] / _hpp_total * 100
+                    st.caption(f"Setara {_mc_pct:.1f}% dari HPP — margin konservatif, "
+                               f"mencerminkan kontribusi per ton secara hati-hati.")
                 gp["realization_factor"] = st.number_input("Faktor Realisasi", 0.50, 1.00,
                     float(gp.get("realization_factor",0.75)), 0.05, key="gp_rf",
                     help="Porsi kapasitas tambahan yang diasumsikan terserap demand.")
@@ -525,6 +761,32 @@ def render():
                 _cc["benefit_apply_realization"] = st.toggle(
                     "Terapkan Faktor Realisasi pada Headroom",
                     _cc.get("benefit_apply_realization", True), key="cc_brf")
+                st.markdown("<div style='margin-top:6px;font-size:.78rem;font-weight:700;"
+                            "color:#071952;'>Rendemen proses pada kapasitas:</div>",
+                            unsafe_allow_html=True)
+                # Rendemen efektif diturunkan dari neraca massa BFD (rata-rata
+                # rendemen tahap pada alur lini referensi)
+                _ref_lt = line_types[0] if line_types else None
+                _ref_flow = [c for c in cat.get("line_blueprints", {}).get(_ref_lt, [])
+                             if c in categories] if _ref_lt else []
+                _calc_y = 100.0
+                for _s in _ref_flow:
+                    _calc_y *= float(cat.get("stage_yields", {}).get(_s, 99.5)) / 100.0
+                gp["effective_yield_pct"] = st.number_input(
+                    "Rendemen Proses Efektif (%)", 80.0, 100.0,
+                    float(gp.get("effective_yield_pct", round(_calc_y, 1))), 0.1,
+                    key="gp_eyld",
+                    help="Persen produk jadi terhadap material yang diproses, sesuai "
+                         "neraca massa lini filling. Dipakai bila opsi di bawah aktif.")
+                _cc["apply_yield_to_capacity"] = st.toggle(
+                    "Perhitungkan rendemen pada kapasitas efektif",
+                    _cc.get("apply_yield_to_capacity", False), key="cc_ayc",
+                    help="Aktif: kapasitas dihitung sebagai kapasitas nominal \u00d7 "
+                         "rendemen (basis produk jadi), pada menu Evaluasi Kapasitas "
+                         "dan Alokasi Produksi. Nonaktif: kapasitas nominal (default).")
+                if _ref_flow:
+                    st.caption(f"Rendemen acuan dari neraca massa lini {_ref_lt}: "
+                               f"{_calc_y:.1f}%. Dapat ditimpa manual di atas.")
 
             with st.container(border=True):
                 st.markdown("**Parameter Tambahan**")
@@ -605,6 +867,8 @@ def render():
         _vb_formula = " + ".join(_vb_terms) if _vb_terms else "— [seluruh komponen nonaktif]"
         _frm_rows = [
             ("Volume Bernilai", _vb_formula),
+            ("HPP per Ton", "Bahan Baku Langsung + Tenaga Kerja Langsung + Overhead Pabrik"),
+            ("Nilai Manfaat per Ton", "Margin kontribusi di atas HPP (nilai jual − biaya produksi)"),
             ("Manfaat Tahunan", "Volume Bernilai × Nilai Manfaat per Ton"),
             ("OPEX Tahunan", "Jumlah seluruh item OPEX yang berlaku pada paket investasi"),
             ("Depresiasi", f"Total CAPEX ÷ Umur Ekonomis Aset ({_ul_s})" + _on("include_tax")),

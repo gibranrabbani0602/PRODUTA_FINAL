@@ -89,7 +89,12 @@ def render():
     params["maintenance_annual"] = 0.0
     params["calc_config"] = _cat.get("calc_config", {})
 
-    # ── Deteksi lini dari data yang sudah dimuat ─────────────────────────────
+    # ── Rendemen proses pada kapasitas efektif (opsional, default nonaktif) ──
+    # Bila aktif, kapasitas dihitung basis produk jadi = nominal x rendemen.
+    # Tidak dobel-hitung: angka DES & kapasitas mesin berbasis throughput
+    # (material diproses), rendemen mengubahnya menjadi basis produk jadi.
+    _yield_on = bool(params["calc_config"].get("apply_yield_to_capacity", False))
+    _cap_yield = (float(_gp.get("effective_yield_pct", 98.0)) / 100.0) if _yield_on else 1.0
     _prev_df = get_state("simulation_result")
     _prev_n  = _ncols(_prev_df.copy()) if isinstance(_prev_df, pd.DataFrame) and not _prev_df.empty else pd.DataFrame()
     _util_pat = _re.compile(r'Util_Filling_(\w+)')
@@ -597,9 +602,9 @@ def render():
                 _cap_p = _t / (_u/100) if _u > 0 else 0.0
                 # Kapasitas di jadwal penuh (7D/24H) — ton/periode
                 _cap_fp = _cap_p / _sf if _sf > 0.001 else _cap_p
-                # Basis bulanan
-                _cap_m  = _to_month(_cap_p, _horizon_months)   # ton/bln saat ini
-                _cap_fm = _to_month(_cap_fp, _horizon_months)  # ton/bln jika jadwal penuh
+                # Basis bulanan (kapasitas dikali rendemen bila opsi aktif)
+                _cap_m  = _to_month(_cap_p, _horizon_months) * _cap_yield   # ton/bln saat ini
+                _cap_fm = _to_month(_cap_fp, _horizon_months) * _cap_yield  # ton/bln jika jadwal penuh
                 _dem_m  = _to_month(_t, _horizon_months)        # demand/produksi bulanan
                 # Util yang diproyeksikan jika jadwal diperpanjang ke 7D/24H
                 _proj_util_full = (_dem_m / _cap_fm * 100) if _cap_fm > 0 else 0
@@ -801,6 +806,11 @@ def render():
                            "investasi dari katalog (penggantian filler, konversi multiline, "
                            "atau penambahan lini baru) dan memilih yang paling sesuai. "
                            "Jenis investasi dapat dikelola di menu Parameter & Katalog Investasi.")
+                if _yield_on:
+                    st.info(f"Kapasitas dihitung pada basis produk jadi "
+                            f"(rendemen proses {_cap_yield*100:.1f}% dari neraca massa "
+                            f"lini filling). Dapat dinonaktifkan di Parameter & Katalog "
+                            f"Investasi.")
 
                 _iv_pkgs = _cat.get("intervention_packages", {})
 
@@ -841,11 +851,12 @@ def render():
                 _cust_fx = _custom_param_effects()
 
                 def _filler_candidates(fmts):
-                    """Filler dari katalog yang kompatibel format."""
+                    """Filler dari katalog yang kompatibel format.
+                    Kapasitas dikali rendemen bila opsi kapasitas efektif aktif."""
                     out = []
                     for mk, mm in _cat_machines.items():
                         if mm.get("role") != "Filling": continue
-                        cap = float(mm.get("capacity_ton_month", 0) or 0)
+                        cap = float(mm.get("capacity_ton_month", 0) or 0) * _cap_yield
                         if cap <= 0: continue
                         mf = [f.upper() for f in mm.get("format_compat", [])]
                         if not any(f in mf for f in [x.upper() for x in fmts]): continue
@@ -890,47 +901,86 @@ def render():
 
                         _mode = iv.get("mode", "replace")
                         if _mode == "new_line":
-                            # Lini baru mengambil alih beban agar lini existing turun
-                            # ke target utilisasi; sisanya ditanggung lini baru.
-                            # (Bukan sekadar residual di atas kapasitas penuh — yang
-                            # bernilai 0 saat kapasitas existing cukup secara teori.)
-                            _keep_load = (_util_target / 100.0) * _cap_fm
-                            _transfer  = max(_need_m - _keep_load, 0)
-                            if _transfer <= 0:
-                                # Existing sudah bisa mencapai target tanpa lini baru
+                            # Lini baru menanggung kelebihan beban di atas kapasitas
+                            # existing pada BATAS utilisasinya (bukan target). Lini
+                            # existing tetap beroperasi penuh pada batasnya; hanya
+                            # surplus yang tak tertampung dipindah ke lini baru.
+                            # Penambahan lini baru hanya relevan bila existing memang
+                            # tidak sanggup menampung beban pada batas utilisasinya.
+                            # PEMBAGIAN BEBAN LINTAS LINI SE-FORMAT:
+                            # Lini baru tidak hanya menampung surplus lini yang
+                            # didiagnosis, tetapi menambah kapasitas ke seluruh
+                            # lini berformat sama. Total beban semua lini se-format
+                            # + lini baru direbalans agar setiap lini (termasuk
+                            # lini baru) terpakai proporsional — menghindari lini
+                            # baru yang underutilisasi (investasi tidak efektif).
+                            _fmt_set = set(f.upper() for f in _fmts)
+                            _peer_lids = [
+                                _l2 for _l2 in _lids
+                                if set(f.upper() for f in
+                                       _line_cfg.get(_l2, {}).get("formats", [])) & _fmt_set
+                            ]
+                            if lid not in _peer_lids:
+                                _peer_lids.append(lid)
+                            # Total beban & kapasitas existing lini se-format
+                            _pool_load = sum(_line_analysis[_l2]["dem_m"]
+                                             + (_to_month(_unmet_ton, _horizon_months)
+                                                if (_has_unmet and _l2 == _btl_lid) else 0.0)
+                                             for _l2 in _peer_lids)
+                            _pool_cap_exist = sum(_line_analysis[_l2]["cap_fm"]
+                                                  for _l2 in _peer_lids)
+                            # Beban yang harus dipindah ke lini baru = kelebihan di
+                            # atas kapasitas seluruh lini existing pada batasnya
+                            _pool_keep = (_lim / 100.0) * _pool_cap_exist
+                            _transfer  = max(_pool_load - _pool_keep, 0)
+                            if _transfer <= 1.0:
                                 _iv_options.append({
                                     "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                     "filler_key": None, "filler": {}, "filler_cap": 0, "lanes": 1,
                                     "eff_cap": 0, "proj_util": 0, "capex": 0, "extra": 0,
                                     "layak": False, "need_for_fin": 0, "transfer": 0,
                                     "keep_load": _need_m, "not_applicable": True,
+                                    "exist_after": la["util"], "peer_lids": _peer_lids,
                                     "desc": "Tidak relevan untuk kondisi ini — kapasitas "
-                                            "existing memadai mencapai target utilisasi "
-                                            "tanpa lini tambahan.",
+                                            "lini existing se-format masih sanggup "
+                                            "menampung beban pada batas utilisasinya.",
                                 })
                             else:
+                                # Pilih filler agar lini baru terpakai wajar:
+                                # cari yang utilisasinya mendekati batas (efektif),
+                                # bukan yang membuat lini baru menganggur.
                                 _best = None
                                 for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
                                     _pu_new = _transfer / cap * 100 if cap > 0 else 999
                                     if _pu_new <= _lim:
-                                        _best = (mk, mm, cap, _pu_new); break
+                                        # simpan kandidat dgn util tertinggi (≤ batas)
+                                        if _best is None or _pu_new > _best[3]:
+                                            _best = (mk, mm, cap, _pu_new)
                                 if _best is None:
                                     mk, mm, cap = max(_fcands, key=lambda x: x[2])
                                     _best = (mk, mm, cap, (_transfer/cap*100 if cap>0 else 999))
                                 mk, mm, cap, _pu_new = _best
                                 _capex = (mm.get("capex",0) + _extra) * _ohp + _fixc
-                                _exist_after = (_need_m - _transfer) / _cap_fm * 100 if _cap_fm > 0 else 0
+                                # Setelah rebalans: kapasitas total = existing + lini baru.
+                                # Utilisasi gabungan seluruh lini se-format menjadi rata.
+                                _pool_cap_after = _pool_cap_exist + cap
+                                _pool_util_after = (_pool_load / _pool_cap_after * 100
+                                                    if _pool_cap_after > 0 else 0)
+                                # Existing se-format turun ke utilisasi gabungan ini
+                                _exist_after = _pool_util_after
                                 _iv_options.append({
                                     "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                     "filler_key": mk, "filler": mm, "filler_cap": cap, "lanes": 1,
                                     "eff_cap": cap, "proj_util": _pu_new, "capex": _capex, "extra": _extra,
                                     "layak": _pu_new <= _lim, "need_for_fin": _transfer,
-                                    "transfer": _transfer, "keep_load": _need_m - _transfer,
-                                    "exist_after": _exist_after,
-                                    "desc": f"Lini baru menanggung {_transfer:,.0f} ton/bln dengan "
-                                            f"{mm.get('full_name','')}; lini existing turun ke "
-                                            f"{_exist_after:.1f}% utilisasi. "
-                                            f"Utilisasi lini baru {_pu_new:.1f}%.",
+                                    "transfer": _transfer, "keep_load": _pool_load - _transfer,
+                                    "exist_after": _exist_after, "peer_lids": _peer_lids,
+                                    "pool_util_after": _pool_util_after,
+                                    "desc": f"Lini baru menanggung {_transfer:,.0f} ton/bln; "
+                                            f"beban seluruh lini berformat "
+                                            f"{'/'.join(_fmts)} direbalans. Utilisasi lini "
+                                            f"existing se-format turun ke ~{_exist_after:.1f}%, "
+                                            f"utilisasi lini baru {_pu_new:.1f}%.",
                                 })
 
                         elif _mode == "multilane":
@@ -1002,22 +1052,43 @@ def render():
                     _iv_options.sort(key=lambda o: (o.get("not_applicable", False),
                                                     not o["layak"], o["capex"]))
 
-                    # Tabel ringkas semua jenis investasi
-                    _tbl = [{
-                        "Jenis Investasi": o["jenis"],
-                        "Unit Filler": o["filler"].get("full_name",""),
-                        "Konfigurasi": (f'{o["lanes"]} jalur' if o["lanes"] > 1 else "Jalur tunggal"),
-                        "Kapasitas Efektif (ton/bln)": round(o["eff_cap"], 0),
-                        "Proyeksi Util (%)": round(o["proj_util"], 1),
-                        "Memenuhi Kapasitas": ("Tidak relevan" if o.get("not_applicable")
-                                               else ("Ya" if o["layak"] else "Tidak")),
-                        "Estimasi CAPEX": fmt_rp(o["capex"]),
-                    } for o in _iv_options]
+                    # Tabel ringkas semua jenis investasi.
+                    # Untuk penambahan lini baru, kolom util menampilkan hasil
+                    # PEMBAGIAN beban: lini existing turun ke sekian%, lini baru
+                    # menanggung sisanya — bukan 0 (lini lama tidak dihapus).
+                    _tbl = []
+                    for o in _iv_options:
+                        _is_nl_row = (_iv_pkgs.get(o["key"], {}).get("mode") == "new_line")
+                        if _is_nl_row and not o.get("not_applicable"):
+                            # Tipe lini baru = tipe lini yang didiagnosis; format sama
+                            _cfg_txt = f"Lini baru {_ltype.lower()} ({'/'.join(_fmts)})"
+                            _eff_txt = f'{o["eff_cap"]:,.0f} (lini baru)'
+                            _util_txt = (f'existing se-format ~{o.get("exist_after",0):.0f}% + '
+                                         f'baru {o["proj_util"]:.0f}%')
+                        elif _is_nl_row and o.get("not_applicable"):
+                            _cfg_txt = "Lini baru terpisah"
+                            _eff_txt = "Tidak diperlukan"
+                            _util_txt = f'existing cukup ({la["util"]:.0f}%)'
+                        else:
+                            _cfg_txt = (f'{o["lanes"]} jalur' if o["lanes"] > 1 else "Jalur tunggal")
+                            _eff_txt = f'{o["eff_cap"]:,.0f}'
+                            _util_txt = f'{o["proj_util"]:.0f}%'
+                        _tbl.append({
+                            "Jenis Investasi": o["jenis"],
+                            "Unit Filler": o["filler"].get("full_name","") or "—",
+                            "Konfigurasi": _cfg_txt,
+                            "Kapasitas Efektif (ton/bln)": _eff_txt,
+                            "Proyeksi Utilisasi": _util_txt,
+                            "Memenuhi Kapasitas": ("Tidak relevan" if o.get("not_applicable")
+                                                   else ("Ya" if o["layak"] else "Tidak")),
+                            "Estimasi CAPEX": fmt_rp(o["capex"]),
+                        })
                     def _iv_style(v):
                         return {"Ya":"color:#1a7f4b;font-weight:700",
-                                "Tidak":"color:#f85149;font-weight:700"}.get(v,"")
+                                "Tidak":"color:#f85149;font-weight:700",
+                                "Tidak relevan":"color:#8b949e;font-weight:600"}.get(v,"")
                     st.dataframe(
-                        pd.DataFrame(_tbl).style.map(_iv_style, subset=["Memenuhi Kapasitas"]).format(precision=1),
+                        pd.DataFrame(_tbl).style.map(_iv_style, subset=["Memenuhi Kapasitas"]),
                         use_container_width=True, hide_index=True)
 
                     # Rekomendasi sistem = opsi teratas
@@ -1062,6 +1133,9 @@ def render():
                         "util_before": float(_line_analysis.get(lid, {}).get("util", 0)),
                         "transfer": float(_chosen.get("transfer", 0)),
                         "exist_after": float(_chosen.get("exist_after", 0)),
+                        "peer_lids": _chosen.get("peer_lids", [lid]),
+                        "pool_util_after": float(_chosen.get("pool_util_after",
+                                                _chosen.get("exist_after", 0))),
                     }
 
                 if not _sel_machines:
@@ -1097,27 +1171,36 @@ def render():
                             _opex_yr += float(_cm.get("capex", 0)) * float(_cm.get("opex_rate", 0.06)) * _c.get("qty", 1)
                         _opex_yr += _pkg_opex_annual(sm.get("iv_key","")) + _cust_fx["opex_add"]
 
-                        # ── Manfaat tahunan (basis nilai manfaat per ton) ────
-                        # Setiap ton kapasitas tambahan yang terserap dinilai
-                        # dengan margin kontribusi per ton (Parameter Finansial).
-                        # Basis ini berlaku umum untuk semua jenis investasi,
-                        # tidak terikat pada skenario tertentu.
+                        # ── Manfaat tahunan ──────────────────────────────────
+                        # Manfaat = nilai dari TONASE yang kini ditangani kapasitas
+                        # baru (produksi nyata yang terserap), bukan hanya kapasitas
+                        # menganggur. Tiga komponen, dapat diatur di Parameter:
+                        #  (a) tonase yang dipindahkan/ditangani investasi (transfer),
+                        #  (b) unmet demand yang kini terpenuhi,
+                        #  (c) headroom kapasitas tersisa (potensi, × realisasi).
                         _rf       = float(params.get("realization_factor", 0.75))
                         _saving_ton = float(params.get("internal_value_per_ton", 2_100_000))
                         _ccfg     = params.get("calc_config", {}) or {}
-                        # Unmet tahunan: porsi target yang tidak terpenuhi (basis tahunan)
+                        # (a) tonase yang ditangani investasi ini (basis tahunan)
+                        _handled_m = float(sm.get("transfer", 0)) or float(sm.get("need_m", 0))
+                        _handled_yr = _handled_m * 12
+                        # (b) unmet tahunan (porsi target tak terpenuhi)
                         _unmet_yr = (_to_month(_unmet_ton, _horizon_months) * 12
                                      if (_has_unmet and lid == _btl_lid) else 0.0)
                         if not _ccfg.get("benefit_include_unmet", True):
                             _unmet_yr = 0.0
-                        # Headroom: kapasitas baru di atas beban saat ini (potensial)
-                        _headroom_yr = max(0.0, _cap_m - _need_m) * 12
+                        # (c) headroom kapasitas tersisa di atas beban yang ditangani
+                        _headroom_yr = max(0.0, _cap_m - _handled_m) * 12
                         if _ccfg.get("benefit_apply_realization", True):
                             _headroom_yr *= _rf
                         if not _ccfg.get("benefit_include_headroom", True):
                             _headroom_yr = 0.0
-                        _annual_add  = _unmet_yr + _headroom_yr
-                        _annual_benefit = max((_unmet_yr * _saving_ton) + (_headroom_yr * _saving_ton) - _cust_fx["benefit_cut"], 0.0)
+                        # Hindari hitung ganda: bila unmet sudah termasuk dalam tonase
+                        # yang ditangani, jangan dijumlah dua kali.
+                        _benefit_ton_yr = _handled_yr + _headroom_yr
+                        _annual_add  = _benefit_ton_yr
+                        _annual_benefit = max(_benefit_ton_yr * _saving_ton
+                                              - _cust_fx["benefit_cut"], 0.0)
 
                         _p2 = dict(params); _p2["_benefit_override"] = _annual_benefit
                         fin = compute_financial(_total_capex, _annual_add, _p2,
@@ -1162,17 +1245,26 @@ def render():
                         # Lini yang dimodifikasi berubah; lini lain tetap; mode lini
                         # baru menambahkan batang lini baru dengan pembagian beban.
                         _imp_lbls, _imp_before, _imp_after = [], [], []
+                        _peers = sm.get("peer_lids", [lid])
+                        _pool_u = float(sm.get("pool_util_after", sm.get("exist_after", 0)))
                         for _l2 in _lids:
                             _la2 = _line_analysis.get(_l2, {})
                             _ub2 = float(_la2.get("util", 0))
                             _imp_lbls.append(f"Line {_l2}")
                             _imp_before.append(_ub2)
-                            if _l2 != lid:
-                                _imp_after.append(_ub2)          # tidak berubah
+                            if _is_nl_fin and _l2 in _peers:
+                                # Seluruh lini se-format direbalans ke util gabungan
+                                _imp_after.append(_pool_u)
+                            elif _l2 != lid:
+                                _imp_after.append(_ub2)          # tidak terdampak
                             elif _is_nl_fin:
                                 _imp_after.append(float(sm.get("exist_after", _ub2)))
                             else:
                                 _imp_after.append(_pu)           # ganti unit / multijalur
+                        if _is_nl_fin and sm.get("transfer", 0) > 0:
+                            _imp_lbls.append("Lini Baru")
+                            _imp_before.append(0)
+                            _imp_after.append(_pu)
                         if _is_nl_fin and sm.get("transfer", 0) > 0:
                             _imp_lbls.append("Lini Baru")
                             _imp_before.append(0)
@@ -1365,3 +1457,34 @@ def render():
                     st.caption("Rincian langkah perhitungan tiap rekomendasi tersedia pada "
                                "Transparansi Perhitungan di atas. Seluruh parameter mengikuti "
                                "menu Parameter & Katalog Investasi.")
+
+                    # ── Unduh konfigurasi skenario terpilih (untuk Alokasi Produksi
+                    #    atau dokumentasi). Berisi jadwal + hasil rekomendasi per lini.
+                    import io as _io_csv
+                    _exp_rows = []
+                    for _l2 in _lids:
+                        _la2 = _line_analysis.get(_l2, {})
+                        _sm2 = _sel_machines.get(_l2, {})
+                        _exp_rows.append({
+                            "Lini": f"Line {_l2}",
+                            "Jadwal": f"{int(_t2_days.get(_l2,7))}D/{int(_t2_hrs.get(_l2,24))}H",
+                            "Util Sebelum (%)": round(_la2.get("util", 0), 1),
+                            "Tonase (ton/bln)": round(_la2.get("dem_m", 0), 1),
+                            "Kapasitas (ton/bln)": round(_la2.get("cap_fm", 0), 1),
+                            "Keputusan": _t2_dec,
+                            "Rekomendasi": _sm2.get("jenis", "-") if _sm2 else "-",
+                            "Unit Filler": _sm2.get("name", "-") if _sm2 else "-",
+                            "Proj Util Investasi (%)": round(_sm2.get("proj_util", 0), 1) if _sm2 else "",
+                            "Estimasi CAPEX": _sm2.get("total_capex", "") if _sm2 else "",
+                            "Layak Finansial": ("Ya" if _sm2.get("feasible") else "Tidak") if _sm2 else "",
+                        })
+                    _exp_df = pd.DataFrame(_exp_rows)
+                    _buf = _io_csv.StringIO(); _exp_df.to_csv(_buf, index=False)
+                    st.download_button(
+                        "Unduh Konfigurasi Skenario Terpilih (CSV)",
+                        data=_buf.getvalue(),
+                        file_name=f"konfigurasi_skenario_{sel_id}.csv".replace(" ", "_"),
+                        mime="text/csv", key="dl_scenario_cfg",
+                        help="Berisi jadwal operasi, utilisasi, dan hasil rekomendasi "
+                             "per lini untuk skenario terpilih. Dapat dipakai sebagai "
+                             "dokumentasi atau referensi di menu Alokasi Produksi.")
