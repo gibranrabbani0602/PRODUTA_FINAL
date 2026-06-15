@@ -71,14 +71,54 @@ def render():
 
     c1, c2 = st.columns([2, 1])
     with c1:
-        _src_opts = (["Manual", "Dari hasil Evaluasi Kapasitas (skenario terbaik)"]
-                     if _has_sim else ["Manual"])
+        _src_opts = ["Manual"]
+        if _has_sim:
+            _src_opts.append("Dari hasil Evaluasi Kapasitas (otomatis)")
+        _src_opts.append("Unggah CSV konfigurasi skenario")
         _src = st.radio("Sumber kondisi awal:", _src_opts, horizontal=True, key="pa_src")
     with c2:
         _horizon = st.number_input("Horizon Basis Data (bulan)", 1, 36, 12, 1,
             key="pa_horizon",
             help="Tonase dan utilisasi awal merepresentasikan beban produksi "
                  "selama rentang waktu ini.")
+
+    # Sumber 3: unggah CSV konfigurasi yang diekspor dari Evaluasi Kapasitas
+    _csv_detected = []
+    if _src.startswith("Unggah"):
+        st.caption("Unggah file CSV \u201cKonfigurasi Skenario Terpilih\u201d hasil ekspor "
+                   "dari menu Evaluasi Kapasitas. Kolom yang dibaca: Lini, "
+                   "Util Sebelum (%), Tonase (ton/bln).")
+        _cfg_up = st.file_uploader("CSV konfigurasi", type=["csv"], key="pa_cfg_csv",
+                                   label_visibility="collapsed")
+        if _cfg_up is not None:
+            try:
+                _cdf = pd.read_csv(_cfg_up)
+                _cols = {str(c).strip().lower(): c for c in _cdf.columns}
+                def _pick(*names):
+                    for n in names:
+                        if n in _cols: return _cols[n]
+                    return None
+                _c_lini = _pick("lini", "line", "id lini", "id")
+                _c_util = _pick("util sebelum (%)", "utilisasi (%)", "util (%)", "util")
+                _c_ton  = _pick("tonase (ton/bln)", "tonase", "tons", "tonnage")
+                for _, _r in _cdf.iterrows():
+                    _lid = str(_r.get(_c_lini, "")).replace("Line", "").strip()
+                    if not _lid: continue
+                    _u = float(pd.to_numeric(pd.Series([_r.get(_c_util, 0)]),
+                               errors="coerce").fillna(0).iloc[0])
+                    _t = float(pd.to_numeric(pd.Series([_r.get(_c_ton, 0)]),
+                               errors="coerce").fillna(0).iloc[0])
+                    if _u > 0:
+                        _csv_detected.append({"id": _lid, "util": round(_u, 1),
+                                              "tons_m": round(_t, 1)})
+                if _csv_detected:
+                    st.success(f"Konfigurasi terbaca: {len(_csv_detected)} lini "
+                               f"({', '.join('Line ' + d['id'] for d in _csv_detected)}). "
+                               f"Utilisasi dan tonase terisi otomatis.")
+                else:
+                    st.warning("Tidak ada baris lini yang terbaca dari CSV.")
+            except Exception as e:
+                st.error(f"Gagal membaca CSV: {e}")
 
     # Deteksi lini dari data simulasi bila dipilih (normalisasi kolom dulu,
     # agar cocok dengan berbagai format hasil DES — sama seperti Evaluasi Kapasitas)
@@ -124,6 +164,9 @@ def render():
                        "Gunakan input manual, atau jalankan ulang simulasi di Evaluasi "
                        "Kapasitas.")
 
+    # Gabungkan hasil deteksi: CSV unggahan diprioritaskan bila ada
+    if _csv_detected:
+        _detected = _csv_detected
     _n_default = len(_detected) if _detected else 3
     _n_lines = st.number_input("Jumlah lini existing", 1, 12, _n_default, 1, key="pa_nl")
 

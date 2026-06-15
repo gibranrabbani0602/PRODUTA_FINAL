@@ -1246,29 +1246,28 @@ def render():
                         # baru menambahkan batang lini baru dengan pembagian beban.
                         _imp_lbls, _imp_before, _imp_after = [], [], []
                         _peers = sm.get("peer_lids", [lid])
-                        _pool_u = float(sm.get("pool_util_after", sm.get("exist_after", 0)))
+                        _pool_u = float(sm.get("pool_util_after", 0)) or \
+                                  float(sm.get("exist_after", 0))
                         for _l2 in _lids:
                             _la2 = _line_analysis.get(_l2, {})
                             _ub2 = float(_la2.get("util", 0))
                             _imp_lbls.append(f"Line {_l2}")
                             _imp_before.append(_ub2)
-                            if _is_nl_fin and _l2 in _peers:
+                            if _is_nl_fin and _l2 in _peers and _pool_u > 0:
                                 # Seluruh lini se-format direbalans ke util gabungan
                                 _imp_after.append(_pool_u)
                             elif _l2 != lid:
                                 _imp_after.append(_ub2)          # tidak terdampak
                             elif _is_nl_fin:
-                                _imp_after.append(float(sm.get("exist_after", _ub2)))
+                                # fallback: jangan pernah 0; pakai exist_after atau util awal
+                                _ea = float(sm.get("exist_after", 0))
+                                _imp_after.append(_ea if _ea > 0 else _ub2)
                             else:
                                 _imp_after.append(_pu)           # ganti unit / multijalur
                         if _is_nl_fin and sm.get("transfer", 0) > 0:
                             _imp_lbls.append("Lini Baru")
                             _imp_before.append(0)
-                            _imp_after.append(_pu)
-                        if _is_nl_fin and sm.get("transfer", 0) > 0:
-                            _imp_lbls.append("Lini Baru")
-                            _imp_before.append(0)
-                            _imp_after.append(_pu)
+                            _imp_after.append(_pu if _pu > 0 else 0)
                         _fig_imp = go.Figure()
                         _fig_imp.add_trace(go.Bar(name="Sebelum", x=_imp_lbls,
                             y=_imp_before, marker_color="#8b949e",

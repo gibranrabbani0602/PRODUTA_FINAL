@@ -169,9 +169,14 @@ def upload_widget(key: str, label: str, loader_fn, key_suffix: str = "",
         label_visibility="collapsed")
 
     if uploaded is not None:
-        # Identitas file (nama + ukuran) untuk deteksi pergantian file
+        # Identitas file (nama + ukuran) untuk deteksi pergantian file.
+        # Disimpan langsung di session_state (string), bukan via get() yang
+        # default-nya DataFrame kosong (penyebab perbandingan ambigu).
         _fid = f"{uploaded.name}:{getattr(uploaded, 'size', 0)}"
-        _last = get(f"{key}__fid")
+        _fid_key = f"uwfid_{key}{key_suffix}"
+        _last = st.session_state.get(_fid_key, "")
+        if not isinstance(_last, str):
+            _last = ""
         if _fid != _last:
             # File baru/berbeda → proses ulang, ganti cache lama
             try:
@@ -179,14 +184,13 @@ def upload_widget(key: str, label: str, loader_fn, key_suffix: str = "",
                 raw = uploaded.read()
                 df = loader_fn(_io.BytesIO(raw))
                 set_(key, df)
-                set_(f"{key}__fid", _fid)
+                st.session_state[_fid_key] = _fid
                 st.success(f"{label} dimuat: {uploaded.name} ({len(df)} baris)")
                 return df
             except Exception as e:
                 st.error(f"Gagal membaca file: {e}")
                 return cached if has_cache else pd.DataFrame()
         else:
-            # File yang sama dengan yang sudah diproses
             st.success(f"{label} aktif: {uploaded.name} ({len(cached)} baris)")
             return cached
     else:
