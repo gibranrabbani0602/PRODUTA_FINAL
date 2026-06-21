@@ -19,6 +19,49 @@ from modules.scenario_ranking import (scenario_sort_tuple, efficiency_score,
 from modules.financial_calc import (compute_financial, DEFAULT_PARAMS, MACHINES, fmt_rp)
 
 
+def _rebalance_pool(pool, demand_by_fmt):
+    """Rebalans proporsional sadar-format.
+    pool: list dict {id, cap, alloc:{fmt:frac}} — kapasitas & alokasi format tiap lini.
+    demand_by_fmt: {fmt: total_demand_ton} — total permintaan per format dalam pool.
+    Untuk SETIAP format, permintaannya dibagi ke lini yang memproduksinya
+    SECARA PROPORSIONAL terhadap kapasitas-format lini itu (cap × alokasi).
+    Hasil: {id: {"load", "util", "cap"}}. Utilisasi antar-lini bervariasi alami
+    karena tiap lini memikul campuran format berbeda (tidak dipaksa sama)."""
+    res = {p["id"]: {"load": 0.0, "cap": float(p.get("cap", 0))} for p in pool}
+    for fmt, dem in demand_by_fmt.items():
+        servers = []
+        for p in pool:
+            fc = float(p.get("cap", 0)) * float(p.get("alloc", {}).get(fmt, 0.0))
+            if fc > 0:
+                servers.append((p["id"], fc))
+        tot = sum(fc for _, fc in servers)
+        if tot <= 0:
+            continue
+        for pid, fc in servers:
+            res[pid]["load"] += dem * fc / tot
+    for pid in res:
+        c = res[pid]["cap"]
+        res[pid]["util"] = (res[pid]["load"] / c * 100.0) if c > 0 else 0.0
+    return res
+
+
+def _pool_demand_by_fmt(pool_lids, line_analysis, line_cfg, extra_by_lid=None):
+    """Total permintaan per format di seluruh pool. Permintaan tiap lini
+    dipecah menurut alokasi formatnya."""
+    extra_by_lid = extra_by_lid or {}
+    dbf = {}
+    for lid in pool_lids:
+        dem = float(line_analysis.get(lid, {}).get("dem_m", 0)) + float(extra_by_lid.get(lid, 0.0))
+        alloc = line_cfg.get(lid, {}).get("alloc", {})
+        if not alloc:
+            # fallback: format dibagi rata bila alokasi belum diset
+            fmts = line_cfg.get(lid, {}).get("formats", []) or ["SSS"]
+            alloc = {f: 1.0 / len(fmts) for f in fmts}
+        for fmt, frac in alloc.items():
+            dbf[fmt] = dbf.get(fmt, 0.0) + dem * frac
+    return dbf
+
+
 def render():
 
     # ── Helper ──────────────────────────────────────────────────────────────
@@ -580,8 +623,40 @@ def render():
                         _fmt_sel = st.multiselect(f"Format Line {lid}",
                             _fmt_opts, default=_dfmt, key=f"p3_fmt_{lid}",
                             label_visibility="collapsed")
+                        # Alokasi kapasitas per format (editable, generik untuk
+                        # format apa pun). Default: dibagi rata; dinormalisasi.
+                        _alloc = {}
+                        if len(_fmt_sel) == 1:
+                            _alloc[_fmt_sel[0]] = 1.0
+                        elif len(_fmt_sel) > 1:
+                            st.caption("Porsi kapasitas tiap format (%)")
+                            _eq = int(round(100.0 / len(_fmt_sel)))
+                            _raw = {}
+                            for _f in _fmt_sel:
+                                _raw[_f] = st.number_input(
+                                    f"% {_f}", 0, 100, _eq, 5,
+                                    key=f"p3_alloc_{lid}_{_f}")
+                            _tot = sum(_raw.values()) or 1
+                            _alloc = {_f: v / _tot for _f, v in _raw.items()}
                         _line_cfg[lid] = {"formats": _fmt_sel, "type": _type_sel,
-                                          "limit": float(_util_limits.get(lid, 85))}
+                                          "limit": float(_util_limits.get(lid, 85)),
+                                          "alloc": _alloc}
+
+                st.markdown("---")
+                st.caption("Konfigurasi lini baru (dipakai bila rekomendasi berupa "
+                           "penambahan lini). Jadwal menentukan kapasitas efektif lini "
+                           "baru = kapasitas filler \u00d7 (hari/7) \u00d7 (jam/24).")
+                _nlc1, _nlc2 = st.columns(2)
+                with _nlc1:
+                    _newline_days = st.number_input("Hari kerja/minggu lini baru",
+                        1, 7, 7, 1, key="p3_nl_days")
+                with _nlc2:
+                    _newline_hours = st.number_input("Jam kerja/hari lini baru",
+                        1, 24, 24, 1, key="p3_nl_hours")
+            # Faktor jadwal lini baru (di luar expander agar selalu terdefinisi)
+            _newline_days  = int(st.session_state.get("p3_nl_days", 7))
+            _newline_hours = int(st.session_state.get("p3_nl_hours", 24))
+            _newline_sched_factor = (_newline_days / 7.0) * (_newline_hours / 24.0)
 
             # ── C. TAHAP 1 / TAHAP 2 ──────────────────────────────────────
             # Ambil data per lini dari skenario terpilih
@@ -890,6 +965,99 @@ def render():
                                    "Tambahkan di menu Parameter & Katalog Investasi.")
                         continue
 
+                    # ── Pool rebalans sadar-format untuk lini ini ─────────────
+                    # Pool = seluruh lini yang berbagi minimal satu format dengan
+                    # lini didiagnosis. Investasi apa pun mengubah kapasitas pool,
+                    # lalu permintaan tiap format dibagi ulang proporsional →
+                    # SEMUA lini se-format ikut berubah (bukan hanya yang didiagnosis).
+                    _diag_fmt_set = set(f.upper() for f in _fmts)
+                    _pool_lids = [
+                        _l2 for _l2 in _lids
+                        if set(f.upper() for f in
+                               _line_cfg.get(_l2, {}).get("formats", [])) & _diag_fmt_set
+                    ]
+                    if lid not in _pool_lids:
+                        _pool_lids.append(lid)
+                    _unmet_by_lid = ({_btl_lid: _to_month(_unmet_ton, _horizon_months)}
+                                     if _has_unmet else {})
+                    _demand_by_fmt = _pool_demand_by_fmt(_pool_lids, _line_analysis,
+                                                         _line_cfg, _unmet_by_lid)
+                    # Basis pool: kapasitas & alokasi tiap lini (sebelum investasi)
+                    _pool_base = [{
+                        "id": _l2, "cap": float(_line_analysis[_l2]["cap_fm"]),
+                        "alloc": (_line_cfg.get(_l2, {}).get("alloc")
+                                  or {f: 1.0/len(_line_cfg.get(_l2, {}).get("formats", ["SSS"]))
+                                      for f in (_line_cfg.get(_l2, {}).get("formats") or ["SSS"])}),
+                    } for _l2 in _pool_lids]
+                    _alloc_diag = next((p["alloc"] for p in _pool_base if p["id"] == lid),
+                                       {f: 1.0/len(_fmts) for f in _fmts})
+
+                    def _eval_pool(new_cap, is_new=False, new_alloc=None):
+                        """Bangun pool dgn kapasitas lini didiagnosis diset new_cap
+                        (atau tambah lini baru), rebalans, kembalikan (max_util, peta)."""
+                        _pl = [dict(p) for p in _pool_base]
+                        if is_new:
+                            _pl.append({"id": "__NEW__", "cap": new_cap,
+                                        "alloc": new_alloc or _alloc_diag})
+                        else:
+                            for p in _pl:
+                                if p["id"] == lid:
+                                    p["cap"] = new_cap
+                        _r = _rebalance_pool(_pl, _demand_by_fmt)
+                        _mx = max((_r[p["id"]]["util"] for p in _pl), default=999)
+                        return _mx, _r
+
+                    # Basis manfaat yang KONSISTEN untuk semua jenis investasi:
+                    # produksi berkelanjutan pool sebelum investasi (pada batas) dan
+                    # total permintaan pool. Manfaat tiap opsi = produksi tambahan
+                    # neto yang kini dapat dilayani (sama metode untuk replace,
+                    # multijalur, maupun lini baru) — hanya CAPEX yang berbeda.
+                    _pool_keep = sum((_line_cfg.get(_l2, {}).get("limit", _lim) / 100.0)
+                                     * _line_analysis[_l2]["cap_fm"] for _l2 in _pool_lids)
+                    _pool_target = sum(_demand_by_fmt.values())
+                    _pool_current = sum(_line_analysis[_l2]["dem_m"] for _l2 in _pool_lids)
+                    # Apakah ada kekurangan kapasitas KERAS (demand > kapasitas nominal,
+                    # benar-benar tak bisa diproduksi)? vs. sekadar di atas batas andal.
+                    _hard_unmet = _pool_target - _pool_current   # = unmet dari DES (bila ada)
+
+                    def _net_new_for(sus_after):
+                        """Produksi tambahan neto = kenaikan demand yang dapat dilayani
+                        secara BERKELANJUTAN (dalam batas utilisasi andal) berkat
+                        investasi. Batas utilisasi = kapasitas andal: produksi di atas
+                        batas bersifat berisiko/tak berkelanjutan, sehingga demand yang
+                        memaksa operasi di atas batas dihitung sebagai 'at-risk' yang
+                        diamankan investasi. Bila demand sudah di dalam kapasitas andal,
+                        manfaat = 0."""
+                        return max(min(_pool_target, sus_after)
+                                   - min(_pool_target, _pool_keep), 0.0)
+
+                    # Helper untuk MEMERINGKAT opsi berdasar kelayakan finansial
+                    # (forward-looking) → rekomendasi default = opsi terbaik secara
+                    # ekonomi, bukan sekadar opsi pertama di katalog.
+                    _eff_cf = float(params.get("effective_capacity_factor", 0.91))
+                    _g_dem  = float(params.get("demand_growth_annual", 0.08))
+                    _N_life = int(params.get("project_lifetime_year", 10))
+                    _vpt    = float(params.get("internal_value_per_ton", 2_100_000))
+                    def _opex_for(filler, lanes, iv_key):
+                        o = float(filler.get("capex", 0)) * float(filler.get("opex_rate", 0.09)) * lanes
+                        for _c in _iv_pkgs.get(iv_key, {}).get("components_extra", []):
+                            _cm = _cat_machines.get(_c["key"], {})
+                            o += float(_cm.get("capex", 0)) * float(_cm.get("opex_rate", 0.06)) * _c.get("qty", 1)
+                        return o + _pkg_opex_annual(iv_key) + _cust_fx["opex_add"]
+                    def _fwd_npv(capex, opex, sus_after):
+                        _cb = (_pool_keep / max(_lim / 100.0, 0.01)) * _eff_cf
+                        _ca = (sus_after  / max(_lim / 100.0, 0.01)) * _eff_cf
+                        _st = []
+                        for _t in range(1, _N_life + 1):
+                            _d = _pool_target * ((1 + _g_dem) ** _t)
+                            _pv = max(0.0, max(0.0, _d - _cb) - max(0.0, _d - _ca))
+                            _st.append(max(_pv * 12 * _vpt - _cust_fx["benefit_cut"], 0.0))
+                        try:
+                            return compute_financial(int(capex), 0,
+                                {**params, "_benefit_stream": _st}, annual_opex_extra=opex).get("npv", 0)
+                        except Exception:
+                            return 0
+
                     # Bangun opsi intervensi sesuai jenis yang berlaku untuk tipe lini ini
                     _iv_options = []   # tiap: dict(jenis, label, filler, capex, proj_util, layak_kapasitas, scope)
 
@@ -901,145 +1069,149 @@ def render():
 
                         _mode = iv.get("mode", "replace")
                         if _mode == "new_line":
-                            # Lini baru menanggung kelebihan beban di atas kapasitas
-                            # existing pada BATAS utilisasinya (bukan target). Lini
-                            # existing tetap beroperasi penuh pada batasnya; hanya
-                            # surplus yang tak tertampung dipindah ke lini baru.
-                            # Penambahan lini baru hanya relevan bila existing memang
-                            # tidak sanggup menampung beban pada batas utilisasinya.
-                            # PEMBAGIAN BEBAN LINTAS LINI SE-FORMAT:
-                            # Lini baru tidak hanya menampung surplus lini yang
-                            # didiagnosis, tetapi menambah kapasitas ke seluruh
-                            # lini berformat sama. Total beban semua lini se-format
-                            # + lini baru direbalans agar setiap lini (termasuk
-                            # lini baru) terpakai proporsional — menghindari lini
-                            # baru yang underutilisasi (investasi tidak efektif).
-                            _fmt_set = set(f.upper() for f in _fmts)
-                            _peer_lids = [
-                                _l2 for _l2 in _lids
-                                if set(f.upper() for f in
-                                       _line_cfg.get(_l2, {}).get("formats", [])) & _fmt_set
-                            ]
-                            if lid not in _peer_lids:
-                                _peer_lids.append(lid)
-                            # Total beban & kapasitas existing lini se-format
-                            _pool_load = sum(_line_analysis[_l2]["dem_m"]
-                                             + (_to_month(_unmet_ton, _horizon_months)
-                                                if (_has_unmet and _l2 == _btl_lid) else 0.0)
-                                             for _l2 in _peer_lids)
-                            _pool_cap_exist = sum(_line_analysis[_l2]["cap_fm"]
-                                                  for _l2 in _peer_lids)
-                            # Beban yang harus dipindah ke lini baru = kelebihan di
-                            # atas kapasitas seluruh lini existing pada batasnya
-                            _pool_keep = (_lim / 100.0) * _pool_cap_exist
-                            _transfer  = max(_pool_load - _pool_keep, 0)
-                            if _transfer <= 1.0:
+                            # Lini baru = menambah kapasitas baru ke pool se-format.
+                            # Seluruh pool (existing + lini baru) direbalans proporsional
+                            # sadar-format. Pilih filler TERKECIL yang membuat utilisasi
+                            # maksimum pool ≤ batas. Manfaat = produksi tambahan neto.
+                            _net_new = max(_pool_target - _pool_keep, 0)
+                            if _net_new <= 1.0:
                                 _iv_options.append({
                                     "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                     "filler_key": None, "filler": {}, "filler_cap": 0, "lanes": 1,
                                     "eff_cap": 0, "proj_util": 0, "capex": 0, "extra": 0,
                                     "layak": False, "need_for_fin": 0, "transfer": 0,
                                     "keep_load": _need_m, "not_applicable": True,
-                                    "exist_after": la["util"], "peer_lids": _peer_lids,
-                                    "desc": "Tidak relevan untuk kondisi ini — kapasitas "
-                                            "lini existing se-format masih sanggup "
-                                            "menampung beban pada batas utilisasinya.",
+                                    "exist_after": la["util"], "peer_lids": _pool_lids,
+                                    "new_line_tons": 0, "net_new": 0,
+                                    "desc": "Tidak relevan untuk kondisi ini — kapasitas lini "
+                                            "existing se-format masih sanggup menampung beban "
+                                            "pada batas utilisasinya (cukup penyeimbangan beban "
+                                            "antar-lini atau penyesuaian jadwal).",
                                 })
                             else:
-                                # Pilih filler agar lini baru terpakai wajar:
-                                # cari yang utilisasinya mendekati batas (efektif),
-                                # bukan yang membuat lini baru menganggur.
-                                _best = None
+                                # Kapasitas efektif lini baru = kapasitas filler ×
+                                # faktor jadwal (hari/jam kerja lini baru). Pilih filler
+                                # terkecil yang membuat utilisasi maksimum pool ≤ batas.
+                                _best = None  # (mk, mm, effcap, mx, rmap)
                                 for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
-                                    _pu_new = _transfer / cap * 100 if cap > 0 else 999
-                                    if _pu_new <= _lim:
-                                        # simpan kandidat dgn util tertinggi (≤ batas)
-                                        if _best is None or _pu_new > _best[3]:
-                                            _best = (mk, mm, cap, _pu_new)
+                                    _eff = cap * _newline_sched_factor
+                                    _mx, _rmap = _eval_pool(_eff, is_new=True, new_alloc=_alloc_diag)
+                                    if _mx <= _lim:
+                                        _best = (mk, mm, _eff, _mx, _rmap); break
                                 if _best is None:
                                     mk, mm, cap = max(_fcands, key=lambda x: x[2])
-                                    _best = (mk, mm, cap, (_transfer/cap*100 if cap>0 else 999))
-                                mk, mm, cap, _pu_new = _best
+                                    _eff = cap * _newline_sched_factor
+                                    _mx, _rmap = _eval_pool(_eff, is_new=True, new_alloc=_alloc_diag)
+                                    _best = (mk, mm, _eff, _mx, _rmap)
+                                mk, mm, cap, _mx, _rmap = _best
                                 _capex = (mm.get("capex",0) + _extra) * _ohp + _fixc
-                                # Setelah rebalans: kapasitas total = existing + lini baru.
-                                # Utilisasi gabungan seluruh lini se-format menjadi rata.
-                                _pool_cap_after = _pool_cap_exist + cap
-                                _pool_util_after = (_pool_load / _pool_cap_after * 100
-                                                    if _pool_cap_after > 0 else 0)
-                                # Existing se-format turun ke utilisasi gabungan ini
-                                _exist_after = _pool_util_after
+                                _new_util = _rmap.get("__NEW__", {}).get("util", 0)
+                                _new_tons = _rmap.get("__NEW__", {}).get("load", 0)
+                                _peer_u = {l2: _rmap[l2]["util"] for l2 in _pool_lids}
+                                _peer_t = {l2: _rmap[l2]["load"] for l2 in _pool_lids}
+                                _sus_after_nl = _pool_keep + (_lim / 100.0) * cap
+                                _net_new = _net_new_for(_sus_after_nl)
                                 _iv_options.append({
                                     "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                     "filler_key": mk, "filler": mm, "filler_cap": cap, "lanes": 1,
-                                    "eff_cap": cap, "proj_util": _pu_new, "capex": _capex, "extra": _extra,
-                                    "layak": _pu_new <= _lim, "need_for_fin": _transfer,
-                                    "transfer": _transfer, "keep_load": _pool_load - _transfer,
-                                    "exist_after": _exist_after, "peer_lids": _peer_lids,
-                                    "pool_util_after": _pool_util_after,
-                                    "desc": f"Lini baru menanggung {_transfer:,.0f} ton/bln; "
-                                            f"beban seluruh lini berformat "
-                                            f"{'/'.join(_fmts)} direbalans. Utilisasi lini "
-                                            f"existing se-format turun ke ~{_exist_after:.1f}%, "
-                                            f"utilisasi lini baru {_pu_new:.1f}%.",
+                                    "eff_cap": cap, "proj_util": _new_util, "capex": _capex,
+                                    "extra": _extra, "layak": _mx <= _lim,
+                                    "need_for_fin": _net_new, "transfer": _net_new,
+                                    "keep_load": _pool_keep, "not_applicable": False,
+                                    "exist_after": _mx, "peer_lids": _pool_lids,
+                                    "peer_util_after": _peer_u, "peer_tons_after": _peer_t,
+                                    "pool_util_after": _new_util, "new_line_tons": _new_tons,
+                                    "net_new": _net_new, "pool_max_util": _mx,
+                                    "sus_after": _sus_after_nl,
+                                    "pool_target": _pool_target,
+                                    "new_days": _newline_days, "new_hours": _newline_hours,
+                                    "desc": f"Lini baru ditambahkan ke kelompok format "
+                                            f"{'/'.join(_fmts)}. Seluruh lini se-format "
+                                            f"direbalans proporsional; lini baru menangani "
+                                            f"{_new_tons:,.0f} ton/bln (utilisasi {_new_util:.1f}%). "
+                                            f"Produksi tambahan neto {_net_new:,.0f} ton/bln.",
                                 })
 
                         elif _mode == "multilane":
-                            # Multijalur: kapasitas efektif = jumlah jalur × kapasitas per-unit.
-                            # Cari kombinasi (unit, jumlah jalur) dengan jalur MINIMUM yang
-                            # cukup menampung beban pada batas — sehingga utilisasi tetap
-                            # sehat (mendekati target), bukan boros dengan jalur maksimum.
-                            _best = None  # (mk, mm, cap, lanes, effcap, pu)
+                            # Multijalur: kapasitas efektif = jumlah jalur × kapasitas
+                            # per-unit. Kapasitas lini berubah → seluruh pool direbalans.
+                            # Pilih kombinasi (unit, jalur) dengan jalur MINIMUM yang
+                            # membuat utilisasi maksimum pool ≤ batas.
+                            _best = None  # (mk, mm, cap, lanes, effcap, mx, rmap)
                             for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
                                 _max_lanes = int(mm.get("multiline_lanes", 4))
                                 for _n in range(1, _max_lanes + 1):
                                     _effcap = cap * _n
-                                    _pu = _need_m / _effcap * 100 if _effcap > 0 else 999
-                                    if _pu <= _lim:
-                                        _cand = (mk, mm, cap, _n, _effcap, _pu)
-                                        # pilih yang utilisasinya paling mendekati target (paling efisien)
-                                        if (_best is None or
-                                            abs(_pu - _util_target) < abs(_best[5] - _util_target)):
-                                            _best = _cand
-                                        break  # jalur minimum untuk unit ini sudah ketemu
+                                    _mx, _rmap = _eval_pool(_effcap)
+                                    if _mx <= _lim:
+                                        _best = (mk, mm, cap, _n, _effcap, _mx, _rmap)
+                                        break
+                                if _best is not None:
+                                    break
                             if _best is None:
-                                # tak ada yang cukup → unit terbesar dengan jalur maksimum
                                 _t = max(_fcands, key=lambda x: x[2] * int(x[1].get("multiline_lanes", 4)))
                                 _mk, _mm, _cap = _t
                                 _n = int(_mm.get("multiline_lanes", 4)); _effcap = _cap * _n
-                                _best = (_mk, _mm, _cap, _n, _effcap,
-                                         (_need_m / _effcap * 100 if _effcap > 0 else 999))
-                            mk, mm, cap, _lanes, _effcap, _pu = _best
+                                _mx, _rmap = _eval_pool(_effcap)
+                                _best = (_mk, _mm, _cap, _n, _effcap, _mx, _rmap)
+                            mk, mm, cap, _lanes, _effcap, _mx, _rmap = _best
+                            _pu = _rmap.get(lid, {}).get("util", 0)
                             _capex = (mm.get("capex",0)*_lanes + _extra) * _ohp + _fixc
+                            _peer_u = {l2: _rmap[l2]["util"] for l2 in _pool_lids}
+                            _peer_t = {l2: _rmap[l2]["load"] for l2 in _pool_lids}
+                            _sus_after = sum((_line_cfg.get(_l2, {}).get("limit", _lim)/100.0)
+                                             * (_effcap if _l2 == lid else _line_analysis[_l2]["cap_fm"])
+                                             for _l2 in _pool_lids)
+                            _nn = _net_new_for(_sus_after)
                             _iv_options.append({
                                 "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                 "filler_key": mk, "filler": mm, "filler_cap": cap, "lanes": _lanes,
                                 "eff_cap": _effcap, "proj_util": _pu, "capex": _capex, "extra": _extra,
-                                "layak": _pu <= _lim, "need_for_fin": _need_m,
+                                "layak": _mx <= _lim, "need_for_fin": _nn,
+                                "net_new": _nn, "sus_after": _sus_after, "pool_target": _pool_target,
+                                "peer_lids": _pool_lids, "peer_util_after": _peer_u,
+                                "peer_tons_after": _peer_t, "pool_max_util": _mx,
                                 "desc": f"{_lanes} jalur paralel {mm.get('full_name','')} "
-                                        f"(kapasitas efektif {_effcap:,.0f} ton/bln), "
-                                        f"proyeksi utilisasi {_pu:.1f}%.",
+                                        f"(kapasitas efektif {_effcap:,.0f} ton/bln). Seluruh "
+                                        f"lini se-format direbalans; utilisasi Line {lid} "
+                                        f"{_pu:.1f}%, tertinggi di pool {_mx:.1f}%.",
                             })
 
                         else:  # replace_filler
-                            # Penggantian unit tunggal: satu filler menanggung seluruh beban.
+                            # Penggantian unit tunggal pada lini didiagnosis. Kapasitas
+                            # lini berubah → seluruh pool se-format direbalans. Pilih
+                            # filler TERKECIL yang membuat utilisasi maksimum pool ≤ batas.
                             _best = None
                             for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
-                                _pu = _need_m / cap * 100 if cap > 0 else 999
-                                if _pu <= _lim:
-                                    _best = (mk, mm, cap, _pu); break
+                                _mx, _rmap = _eval_pool(cap)
+                                if _mx <= _lim:
+                                    _best = (mk, mm, cap, _mx, _rmap); break
                             if _best is None:
                                 mk, mm, cap = max(_fcands, key=lambda x: x[2])
-                                _best = (mk, mm, cap, (_need_m/cap*100 if cap>0 else 999))
-                            mk, mm, cap, _pu = _best
+                                _mx, _rmap = _eval_pool(cap)
+                                _best = (mk, mm, cap, _mx, _rmap)
+                            mk, mm, cap, _mx, _rmap = _best
+                            _pu = _rmap.get(lid, {}).get("util", 0)
                             _capex = (mm.get("capex",0) + _extra) * _ohp + _fixc
+                            _peer_u = {l2: _rmap[l2]["util"] for l2 in _pool_lids}
+                            _peer_t = {l2: _rmap[l2]["load"] for l2 in _pool_lids}
+                            _sus_after = sum((_line_cfg.get(_l2, {}).get("limit", _lim)/100.0)
+                                             * (cap if _l2 == lid else _line_analysis[_l2]["cap_fm"])
+                                             for _l2 in _pool_lids)
+                            _nn = _net_new_for(_sus_after)
                             _iv_options.append({
                                 "jenis": iv["name"], "key": iv_key, "scope": iv.get("scope",""),
                                 "filler_key": mk, "filler": mm, "filler_cap": cap, "lanes": 1,
                                 "eff_cap": cap, "proj_util": _pu, "capex": _capex, "extra": _extra,
-                                "layak": _pu <= _lim, "need_for_fin": _need_m,
+                                "layak": _mx <= _lim, "need_for_fin": _nn,
+                                "net_new": _nn, "sus_after": _sus_after, "pool_target": _pool_target,
+                                "peer_lids": _pool_lids, "peer_util_after": _peer_u,
+                                "peer_tons_after": _peer_t, "pool_max_util": _mx,
                                 "desc": f"Filler tunggal {mm.get('full_name','')} "
-                                        f"({cap:,.0f} ton/bln) menggantikan unit existing, "
-                                        f"proyeksi utilisasi {_pu:.1f}%.",
+                                        f"({cap:,.0f} ton/bln) menggantikan unit existing. "
+                                        f"Seluruh lini se-format {'/'.join(_fmts)} direbalans; "
+                                        f"utilisasi Line {lid} {_pu:.1f}%, tertinggi di pool "
+                                        f"{_mx:.1f}%.",
                             })
 
                     if not _iv_options:
@@ -1052,6 +1224,20 @@ def render():
                     _iv_options.sort(key=lambda o: (o.get("not_applicable", False),
                                                     not o["layak"], o["capex"]))
 
+                    # Peringkat opsi: opsi yang tidak relevan di akhir; selebihnya
+                    # diurut prioritas kelayakan kapasitas, lalu NPV (forward-looking)
+                    # tertinggi. Rekomendasi sistem = opsi terbaik secara ekonomi.
+                    for o in _iv_options:
+                        if o.get("not_applicable"):
+                            o["npv"] = float("-inf")
+                        else:
+                            o["npv"] = _fwd_npv(o["capex"],
+                                                _opex_for(o.get("filler", {}), o.get("lanes", 1), o["key"]),
+                                                o.get("sus_after", _pool_keep))
+                    _iv_options.sort(key=lambda o: (o.get("not_applicable", False),
+                                                    not o.get("layak", False),
+                                                    -(o["npv"] if o["npv"] != float("-inf") else -1e30)))
+
                     # Tabel ringkas semua jenis investasi.
                     # Untuk penambahan lini baru, kolom util menampilkan hasil
                     # PEMBAGIAN beban: lini existing turun ke sekian%, lini baru
@@ -1060,8 +1246,11 @@ def render():
                     for o in _iv_options:
                         _is_nl_row = (_iv_pkgs.get(o["key"], {}).get("mode") == "new_line")
                         if _is_nl_row and not o.get("not_applicable"):
-                            # Tipe lini baru = tipe lini yang didiagnosis; format sama
-                            _cfg_txt = f"Lini baru {_ltype.lower()} ({'/'.join(_fmts)})"
+                            # Label lini baru: sebut kapasitas total & format saja.
+                            # TIDAK menyebut jumlah jalur — capacity_ton_month sudah
+                            # kapasitas TOTAL mesin (bukan per-jalur), sehingga
+                            # menyebut "N jalur" justru menyesatkan.
+                            _cfg_txt = f"Lini baru terpisah ({'/'.join(_fmts)})"
                             _eff_txt = f'{o["eff_cap"]:,.0f} (lini baru)'
                             _util_txt = (f'existing se-format ~{o.get("exist_after",0):.0f}% + '
                                          f'baru {o["proj_util"]:.0f}%')
@@ -1070,7 +1259,13 @@ def render():
                             _eff_txt = "Tidak diperlukan"
                             _util_txt = f'existing cukup ({la["util"]:.0f}%)'
                         else:
-                            _cfg_txt = (f'{o["lanes"]} jalur' if o["lanes"] > 1 else "Jalur tunggal")
+                            # Konversi multijalur → sebut jumlah jalur; penggantian
+                            # filler → sebut TIPE lini (bukan "jalur tunggal" yang
+                            # membingungkan untuk lini multiline).
+                            if o["lanes"] > 1:
+                                _cfg_txt = f'{o["lanes"]} jalur paralel'
+                            else:
+                                _cfg_txt = f'Ganti filler pada lini {_ltype.lower()} ({"/".join(_fmts)})'
                             _eff_txt = f'{o["eff_cap"]:,.0f}'
                             _util_txt = f'{o["proj_util"]:.0f}%'
                         _tbl.append({
@@ -1136,6 +1331,19 @@ def render():
                         "peer_lids": _chosen.get("peer_lids", [lid]),
                         "pool_util_after": float(_chosen.get("pool_util_after",
                                                 _chosen.get("exist_after", 0))),
+                        "peer_util_after": _chosen.get("peer_util_after", {}),
+                        "peer_tons_after": _chosen.get("peer_tons_after", {}),
+                        "new_line_tons": float(_chosen.get("new_line_tons", 0)),
+                        "net_new": float(_chosen.get("net_new", _chosen.get("transfer", 0))),
+                        "sus_after": float(_chosen.get("sus_after", 0)),
+                        "pool_target": float(_chosen.get("pool_target", 0)),
+                        "pool_keep": float(_pool_keep),
+                        "pool_current": float(_pool_current),
+                        "lim": float(_lim),
+                        "pool_current": float(_pool_current),
+                        "lim": float(_lim),
+                        "new_days": int(_chosen.get("new_days", 7)),
+                        "new_hours": int(_chosen.get("new_hours", 24)),
                     }
 
                 if not _sel_machines:
@@ -1171,38 +1379,56 @@ def render():
                             _opex_yr += float(_cm.get("capex", 0)) * float(_cm.get("opex_rate", 0.06)) * _c.get("qty", 1)
                         _opex_yr += _pkg_opex_annual(sm.get("iv_key","")) + _cust_fx["opex_add"]
 
-                        # ── Manfaat tahunan ──────────────────────────────────
-                        # Manfaat = nilai dari TONASE yang kini ditangani kapasitas
-                        # baru (produksi nyata yang terserap), bukan hanya kapasitas
-                        # menganggur. Tiga komponen, dapat diatur di Parameter:
-                        #  (a) tonase yang dipindahkan/ditangani investasi (transfer),
-                        #  (b) unmet demand yang kini terpenuhi,
-                        #  (c) headroom kapasitas tersisa (potensi, × realisasi).
+                        # ── Manfaat — FORWARD-LOOKING (ekspansi kapasitas proaktif) ──
+                        # Investasi kapasitas dinilai sebagaimana praktik nyata: atas
+                        # produksi tambahan yang dapat DILAYANI sepanjang umur proyek
+                        # seiring demand tumbuh. Tiap tahun dibandingkan unmet TANPA vs
+                        # DENGAN investasi; selisihnya (demand yang kini terlayani,
+                        # sebelumnya hilang) × margin = manfaat tahun itu.
+                        # Ini menyelesaikan kasus "titik 34%": demand masih terpenuhi
+                        # kini, tetapi investasi mencegah unmet yang datang saat tumbuh
+                        # (sesuai prinsip: investasi dilakukan SEBELUM kapasitas habis).
+                        # Peka skenario: demand jauh di bawah kapasitas → manfaat ~0
+                        # (tak perlu investasi); demand mendekati/menembus kapasitas →
+                        # manfaat tumbuh → investasi menjadi layak.
                         _rf       = float(params.get("realization_factor", 0.75))
                         _saving_ton = float(params.get("internal_value_per_ton", 2_100_000))
+                        _g        = float(params.get("demand_growth_annual", 0.08))
+                        _eff      = float(params.get("effective_capacity_factor", 0.91))
                         _ccfg     = params.get("calc_config", {}) or {}
-                        # (a) tonase yang ditangani investasi ini (basis tahunan)
-                        _handled_m = float(sm.get("transfer", 0)) or float(sm.get("need_m", 0))
-                        _handled_yr = _handled_m * 12
-                        # (b) unmet tahunan (porsi target tak terpenuhi)
-                        _unmet_yr = (_to_month(_unmet_ton, _horizon_months) * 12
-                                     if (_has_unmet and lid == _btl_lid) else 0.0)
-                        if not _ccfg.get("benefit_include_unmet", True):
-                            _unmet_yr = 0.0
-                        # (c) headroom kapasitas tersisa di atas beban yang ditangani
-                        _headroom_yr = max(0.0, _cap_m - _handled_m) * 12
-                        if _ccfg.get("benefit_apply_realization", True):
-                            _headroom_yr *= _rf
-                        if not _ccfg.get("benefit_include_headroom", True):
-                            _headroom_yr = 0.0
-                        # Hindari hitung ganda: bila unmet sudah termasuk dalam tonase
-                        # yang ditangani, jangan dijumlah dua kali.
-                        _benefit_ton_yr = _handled_yr + _headroom_yr
-                        _annual_add  = _benefit_ton_yr
-                        _annual_benefit = max(_benefit_ton_yr * _saving_ton
-                                              - _cust_fx["benefit_cut"], 0.0)
+                        _lim_f    = max(float(sm.get("lim", 85)) / 100.0, 0.01)
+                        # Kapasitas EFEKTIF pool (maks produksi sebelum unmet, sudah
+                        # memperhitungkan changeover/BLOSS — konsisten dgn DES):
+                        #   efektif = (kapasitas nominal) × faktor_kapasitas_efektif
+                        _cap_before = (float(sm.get("pool_keep", 0)) / _lim_f) * _eff
+                        _cap_after  = (float(sm.get("sus_after", 0)) / _lim_f) * _eff
+                        _dem0       = float(sm.get("pool_target", 0))   # demand kini (+unmet)
+                        _N        = int(params.get("project_lifetime_year", 10))
+                        _benefit_stream, _prevented_list = [], []
+                        for _t in range(1, _N + 1):
+                            _dem_t = _dem0 * ((1 + _g) ** _t)
+                            _unmet_wo = max(0.0, _dem_t - _cap_before)   # tanpa investasi
+                            _unmet_wi = max(0.0, _dem_t - _cap_after)    # dengan investasi
+                            _prev_t   = max(0.0, _unmet_wo - _unmet_wi)  # demand kini terlayani
+                            _prevented_list.append(_prev_t)
+                            # Manfaat = kehilangan penjualan yang DICEGAH × margin.
+                            # Tidak dikenai haircut realisasi: lost-sales yang dicegah
+                            # terealisasi penuh saat demand forecast terjadi (haircut
+                            # realisasi diperuntukkan manfaat spekulatif/kapasitas nganggur,
+                            # bukan penjualan yang nyata hilang bila tak berinvestasi).
+                            # Konservatisme sudah ada pada asumsi pertumbuhan demand
+                            # (moderat) dan derating kapasitas efektif.
+                            _ben_t = _prev_t * 12 * _saving_ton
+                            _ben_t = max(_ben_t - _cust_fx["benefit_cut"], 0.0)
+                            _benefit_stream.append(_ben_t)
+                        # Rata-rata untuk tampilan ringkas
+                        _prev_avg = sum(_prevented_list) / max(_N, 1)
+                        _annual_add = _prev_avg * 12
+                        _unmet_yr = _prev_avg * 12          # transparansi: demand tambahan/th
+                        _headroom_yr = 0.0
+                        _new_rev_m = _prev_avg; _secure_m = 0.0
 
-                        _p2 = dict(params); _p2["_benefit_override"] = _annual_benefit
+                        _p2 = dict(params); _p2["_benefit_stream"] = _benefit_stream
                         fin = compute_financial(_total_capex, _annual_add, _p2,
                                                annual_opex_extra=_opex_yr)
                         _N = int(params.get("project_lifetime_year", 5))
@@ -1217,20 +1443,22 @@ def render():
                                       else f'Line {lid}')
                         st.markdown(
                             f'<div style="font-size:.85rem;font-weight:700;'
-                            f'color:#071952;margin:8px 0 4px 0;">'
+                            f'color:#071952;margin:8px 0 2px 0;">'
                             f'{_hdr_line} — {sm.get("jenis","Investasi")}: {sm["name"]} '
                             f'({_cap_m:.0f} ton/bln → proj. util {_pu:.1f}%)</div>',
                             unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div style="font-size:.78rem;color:#506680;margin:0 0 6px 0;">'
+                            f'Nilai investasi (CAPEX, termasuk overhead instalasi): '
+                            f'<b>{fmt_rp(_total_capex)}</b> — menghasilkan kelayakan berikut:</div>',
+                            unsafe_allow_html=True)
 
-                        _kf_cols = st.columns(5)
+                        _kf_cols = st.columns(3)
                         for col, lbl, val, ok in [
-                            (_kf_cols[0], "Total CAPEX", fmt_rp(_total_capex), True),
-                            (_kf_cols[1], "NPV", fmt_rp(fin["npv"]), fin["npv"]>=0),
-                            (_kf_cols[2], "IRR", f"≥200%" if _irr_pct>200 else f"{_irr_pct:.1f}%",
+                            (_kf_cols[0], "NPV", fmt_rp(fin["npv"]), fin["npv"]>=0),
+                            (_kf_cols[1], "IRR", f"≥200%" if _irr_pct>200 else f"{_irr_pct:.1f}%",
                              _irr_pct/100 >= _r_min),
-                            (_kf_cols[3], "ROI/Tahun", f"≥200%" if _roi_yr>200 else f"{_roi_yr:.1f}%",
-                             _roi_yr >= 10),
-                            (_kf_cols[4], "Payback", f"{_pb:.2f} thn" if fin["payback_year"] else "N/A",
+                            (_kf_cols[2], "Payback", f"{_pb:.2f} thn" if fin["payback_year"] else "N/A",
                              _pb <= _pb_thr),
                         ]:
                             clr = "#3fb950" if ok else "#f85149"
@@ -1241,33 +1469,171 @@ def render():
                                     f'<div class="kpi-value" style="color:{clr};font-size:1rem;">'
                                     f'{val}</div></div>', unsafe_allow_html=True)
 
+                        # Catatan finansial: netral, formal, singkat (bukan alarm).
+                        _g_pct = float(params.get("demand_growth_annual", 0.08)) * 100
+                        if fin["npv"] >= 0:
+                            st.caption(f"Dinilai sebagai ekspansi kapasitas proaktif: pada "
+                                       f"asumsi pertumbuhan demand {_g_pct:.0f}%/tahun, investasi "
+                                       f"mencegah kehilangan penjualan saat demand menembus "
+                                       f"kapasitas — memberi pengembalian positif sepanjang umur lini.")
+                        else:
+                            st.caption(f"Pada parameter saat ini (pertumbuhan demand {_g_pct:.0f}%/"
+                                       f"tahun, nilai manfaat Rp {_saving_ton/1e6:,.1f} jt/ton), opsi ini "
+                                       f"belum mencapai pengembalian positif. Asumsi dapat ditinjau "
+                                       f"di menu Parameter & Katalog Investasi.")
+
+                        # ── ANALISIS SENSITIVITAS (TORNADO) ─────────────────
+                        # Uji ketahanan keputusan: tiap parameter pendorong NPV
+                        # digeser ±range (lainnya tetap di nilai dasar), NPV dihitung
+                        # ulang dengan metode forward-looking yang SAMA. Batang
+                        # diurutkan dari pengaruh terbesar → bentuk tornado. Garis 0
+                        # = ambang kelayakan; garis titik-titik = NPV dasar.
+                        _sens_pct = float(params.get("sensitivity_range_pct", 0.20))
+                        _wacc0    = float(params.get("discount_rate", 0.13))
+
+                        def _npv_sens(margin=None, growth=None, wacc=None,
+                                      capex=None, opex=None, eff=None):
+                            _m  = _saving_ton if margin is None else margin
+                            _gg = _g   if growth is None else growth
+                            _ee = _eff if eff    is None else eff
+                            _cx = _total_capex if capex is None else capex
+                            _ox = _opex_yr if opex is None else opex
+                            _cb = (float(sm.get("pool_keep", 0)) / _lim_f) * _ee
+                            _ca = (float(sm.get("sus_after", 0)) / _lim_f) * _ee
+                            _stream, _prev = [], []
+                            for _tt in range(1, _N + 1):
+                                _dt = _dem0 * ((1 + _gg) ** _tt)
+                                _pv = max(0.0, max(0.0, _dt - _cb) - max(0.0, _dt - _ca))
+                                _prev.append(_pv)
+                                _stream.append(max(_pv * 12 * _m - _cust_fx["benefit_cut"], 0.0))
+                            _pp = dict(params); _pp["_benefit_stream"] = _stream
+                            if wacc is not None:
+                                _pp["discount_rate"] = wacc
+                            _add = sum(_prev) / max(_N, 1) * 12
+                            return compute_financial(int(_cx), _add, _pp,
+                                                     annual_opex_extra=_ox).get("npv", 0)
+
+                        _drivers = [
+                            ("Margin / ton",             "margin", _saving_ton),
+                            ("Pertumbuhan demand",       "growth", _g),
+                            ("WACC",                     "wacc",   _wacc0),
+                            ("CAPEX",                    "capex",  _total_capex),
+                            ("OPEX tahunan",             "opex",   _opex_yr),
+                        ]
+                        # Catatan: "Faktor kapasitas efektif" sengaja TIDAK diuji dalam
+                        # tornado. Faktor ini adalah asumsi operasional yang relatif tetap
+                        # (≈91%) dan secara fisik tidak dapat bergeser ±20% (mis. >100%
+                        # mustahil), sehingga mengujinya dengan rentang sama seperti
+                        # parameter pasar (margin/growth/WACC) akan menyesatkan.
+                        _srows = []
+                        for _dn, _dk, _dbase in _drivers:
+                            _lo_v = _dbase * (1 - _sens_pct)
+                            _hi_v = _dbase * (1 + _sens_pct)
+                            if _dk == "eff":
+                                _hi_v = min(_hi_v, 1.0)
+                            _npv_lo = _npv_sens(**{_dk: _lo_v})
+                            _npv_hi = _npv_sens(**{_dk: _hi_v})
+                            _srows.append({"name": _dn, "key": _dk, "base": _dbase,
+                                           "lo": _npv_lo, "hi": _npv_hi,
+                                           "lo_v": _lo_v, "hi_v": _hi_v,
+                                           "swing": abs(_npv_hi - _npv_lo)})
+                        _srows.sort(key=lambda x: x["swing"], reverse=True)
+
+                        st.markdown(
+                            '<div style="font-size:.85rem;font-weight:700;color:#071952;'
+                            'margin:14px 0 2px 0;">Analisis Sensitivitas (Tornado)</div>',
+                            unsafe_allow_html=True)
+                        st.caption(f"Tiap parameter digeser \u00b1{_sens_pct*100:.0f}% dari nilai "
+                                   f"dasarnya (lainnya tetap), lalu NPV dihitung ulang. Makin "
+                                   f"panjang batang, makin menentukan parameter itu terhadap "
+                                   f"kelayakan. Garis merah putus-putus = ambang layak (NPV 0); "
+                                   f"garis biru titik-titik = NPV dasar.")
+
+                        _fig_t = go.Figure()
+                        for _row in _srows[::-1]:        # bottom-up → terbesar di atas
+                            _x0 = min(_row["lo"], _row["hi"]); _x1 = max(_row["lo"], _row["hi"])
+                            _cross = _x0 < 0 < _x1
+                            _clr = "#d29922" if _cross else ("#1a7f4b" if _x0 >= 0 else "#e05c4b")
+                            _fig_t.add_trace(go.Bar(
+                                y=[_row["name"]], x=[_x1 - _x0], base=[_x0],
+                                orientation="h", marker_color=_clr, showlegend=False,
+                                hovertemplate=(f"{_row['name']}<br>"
+                                               f"\u2212{_sens_pct*100:.0f}%: {fmt_rp(_row['lo'])}<br>"
+                                               f"+{_sens_pct*100:.0f}%: {fmt_rp(_row['hi'])}"
+                                               f"<extra></extra>")))
+                        _fig_t.add_vline(x=fin["npv"], line_dash="dot",
+                                         line_color="#071952", line_width=1)
+                        _fig_t.add_vline(x=0, line_dash="dash",
+                                         line_color="#e05c4b", line_width=1.2)
+                        _fig_t.update_layout(
+                            height=56 * len(_srows) + 60,
+                            margin=dict(l=10, r=10, t=8, b=10),
+                            paper_bgcolor="white", plot_bgcolor="white", bargap=0.35,
+                            xaxis=dict(title="NPV (Rp)", gridcolor="#EBF4F6", zeroline=False),
+                            yaxis=dict(autorange="reversed"))
+                        st.plotly_chart(_fig_t, use_container_width=True)
+
+                        # Tabel ringkas + titik impas parameter kunci (margin)
+                        _stbl = pd.DataFrame([{
+                            "Parameter": _r["name"],
+                            f"NPV \u2212{_sens_pct*100:.0f}%": fmt_rp(_r["lo"]),
+                            f"NPV +{_sens_pct*100:.0f}%": fmt_rp(_r["hi"]),
+                            "Rentang Ayun NPV": fmt_rp(_r["swing"]),
+                        } for _r in _srows])
+                        st.dataframe(_stbl, hide_index=True, use_container_width=True)
+
+                        def _breakeven(key, lo, hi):
+                            """Cari nilai parameter di [lo,hi] saat NPV menyeberang 0."""
+                            _flo = _npv_sens(**{key: lo}); _fhi = _npv_sens(**{key: hi})
+                            if (_flo >= 0) == (_fhi >= 0):
+                                return None
+                            for _ in range(48):
+                                _mid = (lo + hi) / 2.0
+                                if (_npv_sens(**{key: _mid}) >= 0) == (_fhi >= 0):
+                                    hi = _mid
+                                else:
+                                    lo = _mid
+                            return (lo + hi) / 2.0
+
+                        if fin["npv"] >= 0:
+                            _be_m = _breakeven("margin", _saving_ton * 0.05, _saving_ton)
+                            _be_g = _breakeven("growth", -0.05, _g)
+                            _be_w = _breakeven("wacc", _wacc0, 0.60)
+                            _bx = []
+                            if _be_m is not None:
+                                _bx.append(f"margin turun ke Rp {_be_m/1e6:.1f} jt/ton "
+                                           f"(\u2212{(1-_be_m/_saving_ton)*100:.0f}%)")
+                            if _be_g is not None:
+                                _bx.append(f"pertumbuhan demand turun ke {_be_g*100:.1f}%/th")
+                            if _be_w is not None:
+                                _bx.append(f"WACC naik ke {_be_w*100:.0f}%")
+                            if _bx:
+                                st.caption("Titik impas (keputusan berubah jadi tidak layak bila): "
+                                           + "; ".join(_bx) + ". Di luar itu, rekomendasi tetap layak.")
+                            else:
+                                st.caption("Keputusan tahan banting: tetap layak di seluruh rentang "
+                                           f"\u00b1{_sens_pct*100:.0f}% untuk semua parameter di atas.")
+
                         # ── Dampak Kapasitas: seluruh lini (sebelum vs sesudah) ──
-                        # Lini yang dimodifikasi berubah; lini lain tetap; mode lini
-                        # baru menambahkan batang lini baru dengan pembagian beban.
+                        # Untuk SEMUA jenis investasi, lini se-format direbalans:
+                        # nilai "sesudah" diambil dari peta hasil rebalans proporsional.
+                        # Lini di luar pool tidak terdampak.
                         _imp_lbls, _imp_before, _imp_after = [], [], []
-                        _peers = sm.get("peer_lids", [lid])
-                        _pool_u = float(sm.get("pool_util_after", 0)) or \
-                                  float(sm.get("exist_after", 0))
+                        _peer_u = sm.get("peer_util_after", {}) or {}
                         for _l2 in _lids:
                             _la2 = _line_analysis.get(_l2, {})
                             _ub2 = float(_la2.get("util", 0))
                             _imp_lbls.append(f"Line {_l2}")
                             _imp_before.append(_ub2)
-                            if _is_nl_fin and _l2 in _peers and _pool_u > 0:
-                                # Seluruh lini se-format direbalans ke util gabungan
-                                _imp_after.append(_pool_u)
-                            elif _l2 != lid:
-                                _imp_after.append(_ub2)          # tidak terdampak
-                            elif _is_nl_fin:
-                                # fallback: jangan pernah 0; pakai exist_after atau util awal
-                                _ea = float(sm.get("exist_after", 0))
-                                _imp_after.append(_ea if _ea > 0 else _ub2)
+                            if _l2 in _peer_u:
+                                _imp_after.append(_peer_u[_l2])     # hasil rebalans pool
                             else:
-                                _imp_after.append(_pu)           # ganti unit / multijalur
-                        if _is_nl_fin and sm.get("transfer", 0) > 0:
+                                _imp_after.append(_ub2)             # di luar pool, tetap
+                        if _is_nl_fin and sm.get("net_new", sm.get("transfer", 0)) > 0:
                             _imp_lbls.append("Lini Baru")
                             _imp_before.append(0)
-                            _imp_after.append(_pu if _pu > 0 else 0)
+                            _nlu = float(sm.get("pool_util_after", 0)) or float(sm.get("proj_util", 0))
+                            _imp_after.append(_nlu)
                         _fig_imp = go.Figure()
                         _fig_imp.add_trace(go.Bar(name="Sebelum", x=_imp_lbls,
                             y=_imp_before, marker_color="#8b949e",
@@ -1300,22 +1666,21 @@ def render():
 
                         # Tonase per lini: existing vs alokasi setelah investasi
                         _ton_before, _ton_after = [], []
+                        _peer_t = sm.get("peer_tons_after", {}) or {}
                         for _l2 in _lids:
-                            _dm2 = float(_line_analysis.get(_l2, {}).get("dem_m", 0))
+                            _la2t = _line_analysis.get(_l2, {})
+                            _dm2 = float(_la2t.get("dem_m", 0))
                             _ton_before.append(_dm2)
-                            if _l2 != lid:
-                                _ton_after.append(_dm2)
-                            elif _is_nl_fin:
-                                _ton_after.append(float(sm.get("need_m", _dm2)) -
-                                                  float(sm.get("transfer", 0))
-                                                  if sm.get("transfer", 0) > 0 else _dm2)
+                            if _l2 in _peer_t:
+                                _ton_after.append(_peer_t[_l2])     # hasil rebalans pool
                             else:
-                                _ton_after.append(float(sm.get("need_m", _dm2)))
+                                _ton_after.append(_dm2)             # di luar pool, tetap
                         _ton_lbls = [f"Line {_l2}" for _l2 in _lids]
-                        if _is_nl_fin and sm.get("transfer", 0) > 0:
+                        if _is_nl_fin and sm.get("net_new", sm.get("transfer", 0)) > 0:
                             _ton_lbls.append("Lini Baru")
                             _ton_before.append(0)
-                            _ton_after.append(float(sm.get("transfer", 0)))
+                            _ton_after.append(float(sm.get("new_line_tons",
+                                                            sm.get("transfer", 0))))
                         _fig_ton = go.Figure()
                         _fig_ton.add_trace(go.Bar(name="Sebelum", x=_ton_lbls,
                             y=_ton_before, marker_color="#8b949e"))
@@ -1336,9 +1701,9 @@ def render():
                             _det_rows = [
                                 ("CAPEX total (termasuk overhead instalasi)", fmt_rp(_total_capex)),
                                 ("OPEX tahunan", fmt_rp(_opex_yr)),
-                                ("Volume unmet demand / tahun", f"{_unmet_yr:,.0f} ton"),
-                                ("Headroom kapasitas / tahun (terealisasi)", f"{_headroom_yr:,.0f} ton"),
-                                ("Estimasi manfaat / tahun", fmt_rp(_annual_benefit)),
+                                ("Asumsi pertumbuhan demand / tahun", f"{float(params.get('demand_growth_annual',0.08))*100:,.1f}%"),
+                                ("Demand tambahan terlayani / tahun (rata-rata)", f"{_unmet_yr:,.0f} ton"),
+                                ("Estimasi manfaat / tahun (rata-rata)", fmt_rp(fin.get("annual_benefit", 0))),
                                 ("Arus kas bersih / tahun", fmt_rp(fin.get("annual_fcf", 0))),
                             ]
                             st.dataframe(pd.DataFrame(_det_rows, columns=["Item","Nilai"]),
@@ -1405,8 +1770,10 @@ def render():
                         _nl2   = sm.get("mode") == "new_line"
                         _lini2 = (f"Lini Baru<br><span style='font-size:.68rem;color:#8b949e;'>"
                                   f"pendamping Line {lid2}</span>") if _nl2 else f"Line {lid2}"
-                        _cfg2  = (f"{sm.get('lanes',1)} jalur" if sm.get("lanes",1) > 1
-                                  else "Jalur tunggal")
+                        _nl_type2 = _line_cfg.get(lid2, {}).get("type", "Single line")
+                        _cfg2  = (f"{sm.get('lanes',1)} jalur paralel" if sm.get("lanes",1) > 1
+                                  else ("Lini baru terpisah" if _nl2
+                                        else _nl_type2))
                         _ok2   = sm.get("feasible")
                         _st2_c = "#1a7f4b" if _ok2 else "#c0392b"
                         _st2_t = "Layak" if _ok2 else "Tidak layak"
@@ -1428,6 +1795,15 @@ def render():
                         f'margin:3px 2px;font-size:.76rem;color:#071952;">'
                         f'Line {lid2}: {int(_t2_days.get(lid2,7))}D/{int(_t2_hrs.get(lid2,24))}H</span>'
                         for lid2 in _lids)
+                    # Sertakan lini baru bila ada rekomendasi penambahan lini
+                    for lid2, sm in _sel_machines.items():
+                        if sm.get("mode") == "new_line" and sm.get("net_new", 0) > 0:
+                            _nd = int(sm.get("new_days", 7)); _nh = int(sm.get("new_hours", 24))
+                            _sched_chips += (
+                                f'<span style="display:inline-block;background:#F4FBFC;'
+                                f'border:1px dashed #088395;border-radius:4px;padding:3px 12px;'
+                                f'margin:3px 2px;font-size:.76rem;color:#088395;">'
+                                f'Lini Baru (pendamping Line {lid2}): {_nd}D/{_nh}H</span>')
 
                     st.markdown(f"""
                     <div class="dss-card" style="border:1px solid {_concl_clr};border-radius:12px;

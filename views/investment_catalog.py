@@ -272,8 +272,13 @@ def render():
                             with e2:
                                 m["capex"] = st.number_input("CAPEX (Rp)", 0, 50_000_000_000,
                                     int(m.get("capex",0)), 10_000_000, format="%d", key=f"mc_{key}")
-                                m["opex_per_ton"] = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000,
-                                    int(m.get("opex_per_ton",0)), 5_000, format="%d", key=f"mot_{key}")
+                                m["opex_rate"] = st.number_input(
+                                    "Maintenance/Tahun (% dari CAPEX)", 0.0, 20.0,
+                                    float(m.get("opex_rate", 0.06))*100, 0.5, format="%.1f",
+                                    key=f"mor_{key}",
+                                    help="Biaya pemeliharaan tahunan sebagai persentase dari "
+                                         "harga mesin. Acuan: mesin inti/elektronik presisi "
+                                         "5-7%, mesin pendukung 3-4%.") / 100.0
                                 _dft = float(m.get("capacity_ton_month",0)) or round(
                                     float(m.get("capacity_kg_hr",0)) * 730 / 1000, 1)
                                 m["capacity_ton_month"] = st.number_input(
@@ -314,8 +319,8 @@ def render():
             with na2:
                 new_capex = st.number_input("CAPEX (Rp)", 0, 50_000_000_000, 500_000_000,
                                             10_000_000, format="%d", key="ncpx")
-                new_opex  = st.number_input("OPEX/Ton (Rp)", 0, 1_000_000, 100_000,
-                                            5_000, format="%d", key="nopt")
+                new_opex  = st.number_input("Maintenance/Tahun (% dari CAPEX)", 0.0, 20.0,
+                                            6.0, 0.5, format="%.1f", key="nopt") / 100.0
                 new_tonm  = st.number_input("Kapasitas (ton/bln)", 0.0, 2000.0,
                                             75.0, 5.0, key="ntonm",
                                             help="Kapasitas produksi per bulan pada operasi penuh.")
@@ -329,7 +334,7 @@ def render():
                     machines[_slug] = {
                         "name": new_role.upper(), "full_name": new_full.strip(),
                         "role": new_role, "capex": new_capex,
-                        "opex_per_ton": new_opex, "opex_rate": 0.06,
+                        "opex_rate": new_opex,
                         "capacity_kg_hr": 0.0, "capacity_ton_month": new_tonm,
                         "format_compat": new_fmt, "multiline_lanes": 4,
                         "image": "", "note": "",
@@ -671,10 +676,12 @@ def render():
                     100_000_000, format="%d", key="gp_npv")
                 gp["minimum_irr"] = st.number_input("IRR Minimum (%)", 5.0, 50.0,
                     float(gp.get("minimum_irr",0.15))*100, 0.5, key="gp_irr") / 100
-                gp["minimum_roi"] = st.number_input("ROI Minimum (%)", 5.0, 100.0,
-                    float(gp.get("minimum_roi",0.25))*100, 1.0, key="gp_roi") / 100
                 gp["payback_threshold_year"] = st.number_input("Payback Maksimal (tahun)",
-                    1, 10, int(gp.get("payback_threshold_year",3)), 1, key="gp_pb")
+                    1, 15, int(gp.get("payback_threshold_year",3)), 1, key="gp_pb")
+                st.caption("Kriteria layak: NPV ≥ minimum, IRR ≥ minimum, dan Payback ≤ "
+                           "maksimal. ROI/tahun ditampilkan sebagai indikator pelengkap, "
+                           "bukan penentu kelayakan (kurang relevan untuk investasi "
+                           "forward-looking yang manfaatnya tumbuh bertahap).")
 
         with pc2:
             with st.container(border=True):
@@ -723,16 +730,43 @@ def render():
                            "penilaian manfaat seluruh jenis investasi.")
                 gp["internal_value_per_ton"] = st.number_input(
                     "Nilai Manfaat per Ton (Rp)",
-                    500_000, 10_000_000, int(gp.get("internal_value_per_ton",2_100_000)),
-                    100_000, format="%d", key="gp_ivt",
-                    help="Margin kontribusi per ton kapasitas tambahan yang terserap.")
+                    500_000, 100_000_000, int(gp.get("internal_value_per_ton",15_000_000)),
+                    500_000, format="%d", key="gp_ivt",
+                    help="Margin kontribusi per ton kapasitas tambahan. Diturunkan dari "
+                         "gross margin produsen susu publik (Ultrajaya 33,7%, Cimory 41%) "
+                         "lalu ditahan konservatif.")
                 if _hpp_total:
                     _mc_pct = gp["internal_value_per_ton"] / _hpp_total * 100
                     st.caption(f"Setara {_mc_pct:.1f}% dari HPP — margin konservatif, "
                                f"mencerminkan kontribusi per ton secara hati-hati.")
-                gp["realization_factor"] = st.number_input("Faktor Realisasi", 0.50, 1.00,
-                    float(gp.get("realization_factor",0.75)), 0.05, key="gp_rf",
-                    help="Porsi kapasitas tambahan yang diasumsikan terserap demand.")
+
+            with st.container(border=True):
+                st.markdown("**Parameter Ekspansi Kapasitas (forward-looking)**")
+                st.caption("Investasi kapasitas dinilai atas kehilangan penjualan yang "
+                           "DICEGAH seiring demand tumbuh sepanjang umur lini — sesuai "
+                           "prinsip investasi proaktif (sebelum kapasitas habis).")
+                _eg1, _eg2 = st.columns(2)
+                with _eg1:
+                    gp["demand_growth_annual"] = st.number_input(
+                        "Pertumbuhan Demand / Tahun (%)", 0.0, 50.0,
+                        float(gp.get("demand_growth_annual", 0.03)) * 100, 0.5,
+                        key="gp_dg",
+                        help="Parameter skenario perencanaan: proyeksi pertumbuhan demand "
+                             "pasca-skenario, diatur sesuai asumsi manajemen. Pada 0% demand "
+                             "dianggap stabil. Kelayakan investasi sensitif terhadap nilai ini.") / 100.0
+                with _eg2:
+                    gp["effective_capacity_factor"] = st.number_input(
+                        "Faktor Kapasitas Efektif (%)", 70.0, 100.0,
+                        float(gp.get("effective_capacity_factor", 0.91)) * 100, 0.5,
+                        key="gp_ecf",
+                        help="Utilisasi maksimum sebelum unmet (akibat changeover/BLOSS). "
+                             "Konsisten dengan simulasi DES (~91%).") / 100.0
+                gp["sensitivity_range_pct"] = st.number_input(
+                    "Rentang Analisis Sensitivitas / Tornado (\u00b1%)", 5.0, 50.0,
+                    float(gp.get("sensitivity_range_pct", 0.20)) * 100, 5.0,
+                    key="gp_sens",
+                    help="Seberapa jauh tiap parameter digeser (\u00b1) saat menguji "
+                         "ketahanan NPV pada analisis Tornado di Evaluasi Kapasitas.") / 100.0
 
             with st.container(border=True):
                 st.markdown("**Konfigurasi Perhitungan Kelayakan**")
@@ -750,17 +784,13 @@ def render():
                     _cc.get("payback_discounted", False), key="cc_pbd",
                     help="Nonaktif = payback sederhana (standar model referensi internal)")
                 st.markdown("<div style='margin-top:6px;font-size:.78rem;font-weight:700;"
-                            "color:#071952;'>Komposisi Volume Bernilai (dasar manfaat):</div>",
+                            "color:#071952;'>Dasar manfaat (forward-looking):</div>",
                             unsafe_allow_html=True)
-                _cc["benefit_include_unmet"] = st.toggle(
-                    "Sertakan Unmet Demand Tahunan",
-                    _cc.get("benefit_include_unmet", True), key="cc_bun")
-                _cc["benefit_include_headroom"] = st.toggle(
-                    "Sertakan Headroom Kapasitas",
-                    _cc.get("benefit_include_headroom", True), key="cc_bhd")
-                _cc["benefit_apply_realization"] = st.toggle(
-                    "Terapkan Faktor Realisasi pada Headroom",
-                    _cc.get("benefit_apply_realization", True), key="cc_brf")
+                st.caption("Manfaat dihitung sebagai kehilangan penjualan yang DICEGAH "
+                           "seiring demand tumbuh sepanjang umur proyek (tiap ton yang "
+                           "kini dapat dilayani × margin kontribusi). Konservatisme sudah "
+                           "tercakup pada asumsi pertumbuhan demand dan faktor kapasitas "
+                           "efektif di atas.")
                 st.markdown("<div style='margin-top:6px;font-size:.78rem;font-weight:700;"
                             "color:#071952;'>Rendemen proses pada kapasitas:</div>",
                             unsafe_allow_html=True)

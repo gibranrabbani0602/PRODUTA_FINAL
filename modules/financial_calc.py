@@ -257,7 +257,19 @@ DEFAULT_PARAMS = {
     "tax_rate":                 0.25,
     "useful_life_year":         int(_fp_financial.get("PROJECT LIFETIME YEAR",       5)),
     "maintenance_annual":       ANNUAL_MAINTENANCE_FBMI,
+    # Pertumbuhan demand tahunan untuk evaluasi ekspansi kapasitas (forward-looking).
+    # Investasi proaktif dinilai atas unmet yang dicegah seiring demand tumbuh.
+    "demand_growth_annual":     float(_fp_financial.get("DEMAND GROWTH ANNUAL",      0.08)),
+    # Faktor kapasitas efektif: utilisasi maksimum sebelum unmet (akibat changeover/
+    # BLOSS) — konsisten dengan DES (unmet mulai ~91% util, bukan 100%).
+    "effective_capacity_factor": float(_fp_financial.get("EFFECTIVE CAPACITY FACTOR", 0.91)),
 }
+# Umur guna lini filling = aset kapital 10-15 th; evaluasi ekspansi kapasitas
+# memakai umur guna aset (bukan horizon proyek pendek). Default 10 th.
+DEFAULT_PARAMS["project_lifetime_year"] = int(_fp_financial.get("PROJECT LIFETIME YEAR", 10) or 10)
+DEFAULT_PARAMS["useful_life_year"]      = DEFAULT_PARAMS["project_lifetime_year"]
+# Rentang ± untuk analisis sensitivitas (Tornado). Editable di Parameter Finansial.
+DEFAULT_PARAMS["sensitivity_range_pct"] = float(_fp_financial.get("SENSITIVITY RANGE PCT", 0.20) or 0.20)
 
 
 def _machine_capex(machines_qty: list, machines_dict: dict = None) -> dict:
@@ -408,6 +420,21 @@ def compute_financial(total_capex: float,
     else:
         annual_benefit = annual_additional_ton * vpt * rf
 
+    # Forward-looking: manfaat dapat BERBEDA tiap tahun (mis. demand tumbuh →
+    # unmet yang dicegah membesar). Bila _benefit_stream diberikan (list per
+    # tahun), dipakai menggantikan manfaat tetap. Ini metode ekspansi kapasitas
+    # baku: investasi dinilai atas produksi tambahan yang dilayani sepanjang
+    # umur proyek seiring pertumbuhan demand.
+    _benefit_stream = params.get("_benefit_stream", None)
+    def _benefit_at(t):  # t = 1..N
+        if _benefit_stream and len(_benefit_stream) >= t:
+            return float(_benefit_stream[t - 1])
+        return annual_benefit
+    # Untuk tampilan ringkas (breakdown), pakai rata-rata manfaat sepanjang umur
+    if _benefit_stream:
+        _N_disp = int(params.get("project_lifetime_year", DEFAULT_PARAMS["project_lifetime_year"]))
+        annual_benefit = sum(_benefit_at(t) for t in range(1, _N_disp + 1)) / max(_N_disp, 1)
+
     # ── Konfigurasi cara hitung (editable di Parameter & Katalog Investasi) ──
     cfg = params.get("calc_config", {})
     use_tax       = bool(cfg.get("include_tax", True))
@@ -425,14 +452,15 @@ def compute_financial(total_capex: float,
     # Inflasi tahunan: eskalasi biaya operasional (benefit diasumsikan ikut harga)
     inflation = float(params.get("inflation_rate", 0.0)) if use_inflation else 0.0
 
-    # FCF per tahun t (1..N): biaya tereskalasi inflasi, benefit konservatif tetap
+    # FCF per tahun t (1..N): biaya tereskalasi inflasi, benefit per tahun
     annual_fcf_series = []
     for t in range(1, int(params.get("project_lifetime_year", DEFAULT_PARAMS["project_lifetime_year"])) + 1):
         esc       = (1 + inflation) ** (t - 1)
+        ben_t     = _benefit_at(t)
         opex_t    = (annual_opex_extra + maint) * esc
-        ebit_t    = annual_benefit - opex_t - depreciation
+        ebit_t    = ben_t - opex_t - depreciation
         cash_tax  = (max(ebit_t, 0.0) * tax_rate) if use_tax else 0.0
-        fcf_t     = annual_benefit - opex_t - cash_tax - maint_capex * esc
+        fcf_t     = ben_t - opex_t - cash_tax - maint_capex * esc
         annual_fcf_series.append(fcf_t)
 
     annual_fcf = annual_fcf_series[0] if annual_fcf_series else 0.0
@@ -473,10 +501,11 @@ def compute_financial(total_capex: float,
     flags = {
         f"NPV ≥ {fmt_rp(min_npv)}":      npv >= min_npv,
         f"IRR ≥ {min_irr*100:.0f}%":     (irr_pct is not None and irr_pct/100 >= min_irr),
-        f"ROI ≥ {min_roi*100:.0f}%":     roi_pct/100 >= min_roi,
         f"Payback ≤ {pb_thr} thn":       (payback is not None and payback <= pb_thr),
     }
-    feasible = flags[f"NPV ≥ {fmt_rp(min_npv)}"] and flags[f"IRR ≥ {min_irr*100:.0f}%"]
+    feasible = (flags[f"NPV ≥ {fmt_rp(min_npv)}"]
+                and flags[f"IRR ≥ {min_irr*100:.0f}%"]
+                and flags[f"Payback ≤ {pb_thr} thn"])
 
     # Breakdown langkah perhitungan — untuk transparansi di UI
     _t1 = annual_fcf_series[0] if annual_fcf_series else 0.0

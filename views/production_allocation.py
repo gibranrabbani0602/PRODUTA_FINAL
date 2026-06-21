@@ -58,6 +58,23 @@ def render():
                 f"{_cap_yield*100:.1f}%). Dapat dinonaktifkan di Parameter & "
                 f"Katalog Investasi.")
 
+    tab_alok, tab_diag = st.tabs(["Alokasi Produksi", "Diagnosa & Rekomendasi"])
+    with tab_alok:
+        _res = _alokasi_tab(cat, machines, formats, line_types, iv_pkgs,
+                            params, _ccfg, _cap_yield, _yield_on)
+    with tab_diag:
+        if not _res:
+            st.info("Lengkapi konfigurasi lini & daftar produk, lalu klik "
+                    "\u201cJalankan Proyeksi Alokasi\u201d pada tab Alokasi Produksi "
+                    "untuk melihat diagnosa dan rekomendasi.")
+        else:
+            _diagnosa_rekomendasi(_res, cat, machines, iv_pkgs, params, _ccfg)
+
+
+def _alokasi_tab(cat, machines, formats, line_types, iv_pkgs, params,
+                 _ccfg, _cap_yield, _yield_on):
+    """Tab 1 — konfigurasi lini, daftar produk, alokasi, dampak.
+    Mengembalikan dict hasil alokasi (atau None bila belum dijalankan)."""
     # ════════════════════════════════════════════════════════════════════
     # LANGKAH 1 — KONFIGURASI LINI EXISTING
     # ════════════════════════════════════════════════════════════════════
@@ -168,6 +185,26 @@ def render():
     if _csv_detected:
         _detected = _csv_detected
     _n_default = len(_detected) if _detected else 3
+
+    # GOTCHA STREAMLIT: widget ber-key mengabaikan argumen value/default bila
+    # session_state[key] sudah terisi dari render sebelumnya. Maka saat data
+    # terdeteksi (CSV/otomatis) BERUBAH, kita tulis nilainya ke session_state
+    # SEBELUM widget dibuat, lalu rerun — agar tampilan konfigurasi mengikuti
+    # data yang diunggah, bukan tetap di nilai lama.
+    if _detected:
+        _sig = str([(d.get("id"), d.get("util"), d.get("tons_m")) for d in _detected])
+        if st.session_state.get("_pa_applied_sig") != _sig:
+            st.session_state["_pa_applied_sig"] = _sig
+            st.session_state["pa_nl"] = len(_detected)
+            for _ix, _d in enumerate(_detected):
+                st.session_state[f"pa_id_{_ix}"] = str(_d.get("id", chr(65 + _ix)))
+                st.session_state[f"pa_ut_{_ix}"] = float(_d.get("util", 75.0))
+                st.session_state[f"pa_tn_{_ix}"] = float(_d.get("tons_m", 200.0))
+            st.rerun()
+    else:
+        # Kembali ke Manual → bersihkan tanda agar deteksi berikutnya diterapkan
+        st.session_state.pop("_pa_applied_sig", None)
+
     _n_lines = st.number_input("Jumlah lini existing", 1, 12, _n_default, 1, key="pa_nl")
 
     lines = []
@@ -178,15 +215,20 @@ def render():
             _det = _detected[idx] if idx < len(_detected) else {}
             with col:
                 with st.container(border=True):
-                    _lid = st.text_input("ID Lini", _det.get("id", chr(65 + idx)),
-                                         key=f"pa_id_{idx}")
+                    # Nilai default hanya dipakai bila session_state belum ada;
+                    # untuk data terdeteksi, session_state sudah diisi di atas.
+                    _lid = st.text_input("ID Lini",
+                        st.session_state.get(f"pa_id_{idx}", _det.get("id", chr(65 + idx))),
+                        key=f"pa_id_{idx}")
                     _lt = st.selectbox("Tipe Lini", line_types, key=f"pa_lt_{idx}")
                     _fm = st.multiselect("Format kemasan", formats,
                         default=[formats[0]] if formats else [], key=f"pa_fm_{idx}")
                     _ut = st.number_input("Utilisasi saat ini (%)", 0.0, 120.0,
-                        float(_det.get("util", 75.0)), 0.5, key=f"pa_ut_{idx}")
+                        float(st.session_state.get(f"pa_ut_{idx}", _det.get("util", 75.0))),
+                        0.5, key=f"pa_ut_{idx}")
                     _tn = st.number_input("Tonase saat ini (ton/bln)", 0.0, 5000.0,
-                        float(_det.get("tons_m", 200.0)), 5.0, key=f"pa_tn_{idx}")
+                        float(st.session_state.get(f"pa_tn_{idx}", _det.get("tons_m", 200.0))),
+                        5.0, key=f"pa_tn_{idx}")
                     _lim = st.number_input("Batas utilisasi (%)", 50.0, 100.0,
                         _default_limit(_lt), 0.5, key=f"pa_lim_{idx}")
                     _cap = ((_tn / (_ut / 100.0)) if _ut > 0 else 0.0) * _cap_yield
@@ -308,8 +350,10 @@ def render():
                 "menjalankan proyeksi alokasi.")
         return
 
-    if not st.button("Jalankan Proyeksi Alokasi", type="primary", key="pa_run"):
-        st.stop()
+    if st.button("Jalankan Proyeksi Alokasi", type="primary", key="pa_run"):
+        st.session_state["pa_has_run"] = True
+    if not st.session_state.get("pa_has_run"):
+        return None
 
     # ════════════════════════════════════════════════════════════════════
     # LANGKAH 3 — PROYEKSI ALOKASI (load balancing pada lini kompatibel)
@@ -406,89 +450,173 @@ def render():
     with vc1: st.plotly_chart(_fig_u, use_container_width=True, key="pa_fig_u")
     with vc2: st.plotly_chart(_fig_t, use_container_width=True, key="pa_fig_t")
 
-    # ════════════════════════════════════════════════════════════════════
-    # LANGKAH 4 — KEPUTUSAN
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-title">4. Keputusan</div>', unsafe_allow_html=True)
+    # Kembalikan hasil alokasi untuk dipakai tab Diagnosa & Rekomendasi
+    return {
+        "lines": lines,
+        "crit_lines": _crit_lines,
+        "warn_lines": _warn_lines,
+        "unalloc": _unalloc,
+        "sku_df": sku_df,
+        "util_tol": _util_tol,
+        "cap_yield": _cap_yield,
+        "yield_on": _yield_on,
+    }
 
-    _need_invest = bool(_crit_lines or _unalloc)
-    if not _need_invest and not _warn_lines:
-        _dec, _dclr = "LAYAK DIALOKASIKAN", "#1a7f4b"
-        _dmsg = ("Seluruh produk terserap kapasitas existing dan utilisasi semua "
-                 "lini tetap dalam batas.")
-    elif not _need_invest:
-        _dec, _dclr = "LAYAK DENGAN PEMANTAUAN", "#d29922"
-        _wl = ", ".join(f"Line {l['id']} ({l['after_u']:.1f}%)" for l in _warn_lines)
-        _dmsg = (f"Produk terserap, namun utilisasi {_wl} tipis melewati batas "
-                 f"(masih dalam toleransi {_util_tol:.0f} poin) — pantau ketat.")
-    else:
-        _dec, _dclr = "PERLU INVESTASI", "#c0392b"
-        _reasons = []
-        if _unalloc:
-            _reasons.append(f"{len(_unalloc)} produk tidak terserap "
-                            f"({', '.join(u['sku'] for u in _unalloc)})")
-        for l in _crit_lines:
-            _reasons.append(f"utilisasi Line {l['id']} {l['after_u']:.1f}% melewati "
-                            f"batas+toleransi ({l['lim']:.0f}+{_util_tol:.0f})")
-        _dmsg = "Dasar: " + "; ".join(_reasons) + "."
-    st.markdown(
-        f'<div style="border-left:5px solid {_dclr};background:#F8FDFB;'
-        f'border-radius:6px;padding:14px 20px;margin-bottom:12px;">'
-        f'<div style="font-size:1.05rem;font-weight:800;color:{_dclr};">{_dec}</div>'
-        f'<div style="font-size:.82rem;color:#071952;margin-top:4px;">{_dmsg}</div>'
-        f'</div>', unsafe_allow_html=True)
 
-    if not _need_invest:
+def _diagnosa_rekomendasi(res, cat, machines, iv_pkgs, params, _ccfg):
+    """Tab 2 — diagnosa penyerapan, Opsi B investasi (forward-looking),
+    dan verdict 3-arah: TARIK / TAHAN / TETAP MAKLON.
+
+    Filosofi sama dengan Evaluasi Kapasitas (Narasi C):
+    - kapasitas tinggi tidak otomatis memicu investasi;
+    - manfaat dinilai forward-looking (margin x volume ditarik, tumbuh growth,
+      di-cap ke kapasitas — kapasitas nganggur tidak dihitung);
+    - bila investasi belum ekonomis: TAHAN (beri titik impas volume) atau
+      TETAP MAKLON, bukan vonis "tidak layak" yang buntu.
+    """
+    lines    = res["lines"]
+    _crit    = res["crit_lines"]
+    _warn    = res["warn_lines"]
+    _unalloc = res["unalloc"]
+    sku_df   = res["sku_df"]
+    _cap_yield = res.get("cap_yield", 1.0)
+
+    # Parameter finansial — seluruhnya dari Parameter & Katalog Investasi
+    _N      = int(params.get("project_lifetime_year", 10) or 10)
+    _g      = float(params.get("demand_growth_annual", 0.03) or 0.0)
+    _margin = float(params.get("internal_value_per_ton", 10_000_000))
+    _min_irr = float(params.get("minimum_irr", 0.15))
+    _pb_thr  = int(params.get("payback_threshold_year", 7) or 7)
+
+    # ── DIAGNOSA PENYERAPAN ──────────────────────────────────────────────
+    st.markdown('<div class="section-title">Diagnosa Penyerapan Maklon</div>',
+                unsafe_allow_html=True)
+
+    _total_tarik  = float(sku_df["Tonase (ton/bln)"].sum())
+    _unalloc_ton  = sum(u["ton"] for u in _unalloc)
+    _unalloc_fmts = sorted({u["fmt"] for u in _unalloc})
+    _absorbed_ton = _total_tarik - _unalloc_ton
+
+    st.caption("Penarikan SKU maklon dipilah menurut cara penyerapannya: yang "
+               "tertampung kapasitas existing (gratis), yang menekan lini hingga "
+               "kritis, dan yang formatnya belum punya lini di internal.")
+
+    dc = st.columns(3)
+    with dc[0]:
+        st.markdown(
+            f'<div class="kpi-box" style="border-left-color:#1a7f4b;">'
+            f'<div class="kpi-label">Tertampung Existing</div>'
+            f'<div class="kpi-value" style="color:#1a7f4b;font-size:1rem;">'
+            f'{_absorbed_ton:,.0f} ton/bln</div>'
+            f'<div style="font-size:.7rem;color:#57606a;">tarik in-house, tanpa '
+            f'investasi</div></div>', unsafe_allow_html=True)
+    with dc[1]:
+        _ncrit = len(_crit)
+        st.markdown(
+            f'<div class="kpi-box" style="border-left-color:{"#c0392b" if _ncrit else "#1a7f4b"};">'
+            f'<div class="kpi-label">Lini Jadi Kritis</div>'
+            f'<div class="kpi-value" style="color:{"#c0392b" if _ncrit else "#1a7f4b"};font-size:1rem;">'
+            f'{_ncrit} lini</div>'
+            f'<div style="font-size:.7rem;color:#57606a;">'
+            f'{", ".join("Line "+l["id"] for l in _crit) if _crit else "semua dalam batas"}'
+            f'</div></div>', unsafe_allow_html=True)
+    with dc[2]:
+        _nfmt = len(_unalloc_fmts)
+        st.markdown(
+            f'<div class="kpi-box" style="border-left-color:{"#d29922" if _nfmt else "#1a7f4b"};">'
+            f'<div class="kpi-label">Format Tanpa Lini</div>'
+            f'<div class="kpi-value" style="color:{"#d29922" if _nfmt else "#1a7f4b"};font-size:1rem;">'
+            f'{_unalloc_ton:,.0f} ton/bln</div>'
+            f'<div style="font-size:.7rem;color:#57606a;">'
+            f'{"/".join(_unalloc_fmts) if _unalloc_fmts else "tidak ada"}</div>'
+            f'</div>', unsafe_allow_html=True)
+
+    # Kasus paling mulus: semua tertampung, tidak ada lini kritis
+    if not _crit and not _unalloc:
+        st.markdown(
+            f'<div style="border-left:5px solid #1a7f4b;background:#F8FDFB;'
+            f'border-radius:6px;padding:14px 20px;margin:14px 0;">'
+            f'<div style="font-size:1.05rem;font-weight:800;color:#1a7f4b;">'
+            f'TARIK IN-HOUSE \u2014 tanpa investasi</div>'
+            f'<div style="font-size:.82rem;color:#071952;margin-top:4px;">'
+            f'Seluruh {_total_tarik:,.0f} ton/bln SKU maklon tertampung kapasitas '
+            f'existing tanpa melewati batas utilisasi. Penarikan dapat dilakukan '
+            f'langsung; margin kontribusi diamankan in-house tanpa belanja modal.'
+            f'</div></div>', unsafe_allow_html=True)
         return
 
-    # ════════════════════════════════════════════════════════════════════
-    # LANGKAH 5 — OPSI INVESTASI & KELAYAKAN FINANSIAL
-    # ════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-title">5. Opsi Investasi</div>',
-                unsafe_allow_html=True)
-    st.caption("Opsi dibangun dari paket dan katalog mesin pada menu Parameter & "
-               "Katalog Investasi.")
+    # ── OPSI A — PENGATURAN JADWAL (akan datang, Tahap 2) ────────────────
+    if _crit:
+        st.markdown('<div class="section-title">Opsi A \u2014 Pengaturan Jadwal</div>',
+                    unsafe_allow_html=True)
+        st.info("Untuk overflow pada lini berformat-cocok, penyesuaian shift/hari "
+                "dapat menambah kapasitas tanpa investasi. Modul ini akan "
+                "disambungkan pada tahap berikutnya. Format yang belum punya lini "
+                "(mis. di bawah) tidak dapat diselesaikan lewat jadwal \u2014 langsung "
+                "ke Opsi B.")
 
-    # Beban yang harus ditanggung kapasitas baru:
-    #  - seluruh produk tak teralokasi (format tak cocok / tanpa lini kompatibel)
-    #  - kelebihan beban lini KRITIS di atas target utilisasi
-    _util_target = st.number_input("Target utilisasi lini baru / hasil investasi (%)",
+    # ── OPSI B — INVESTASI (forward-looking) ─────────────────────────────
+    st.markdown('<div class="section-title">Opsi B \u2014 Investasi &amp; Kelayakan Penarikan</div>',
+                unsafe_allow_html=True)
+    st.caption("Opsi dibangun dari paket dan katalog mesin pada Parameter & Katalog "
+               "Investasi. Kelayakan dinilai forward-looking: margin atas volume "
+               "yang ditarik, tumbuh sepanjang umur, di-cap ke kapasitas terpasang.")
+
+    _util_target = st.number_input("Target utilisasi kapasitas baru (%)",
         50.0, 95.0, 80.0, 1.0, key="pa_tgt")
-    _need_new = sum(u["ton"] for u in _unalloc)
-    _fmt_need = sorted({u["fmt"] for u in _unalloc})
-    _offload  = 0.0
-    for l in _crit_lines:
+
+    # Beban yang harus ditanggung kapasitas baru
+    _offload = 0.0
+    _fmt_need = set(_unalloc_fmts)
+    for l in _crit:
         _keep = (_util_target / 100.0) * l["cap"]
-        _ovl  = max(l["after_t"] - _keep, 0)
-        _offload += _ovl
-        _fmt_need = sorted(set(_fmt_need) | set(l["formats"]))
-    _total_new_load = _need_new + _offload
+        _offload += max(l["after_t"] - _keep, 0.0)
+        _fmt_need |= set(l["formats"])
+    _fmt_need = sorted(_fmt_need)
+    _total_new = _unalloc_ton + _offload
 
     st.markdown(
         f'<div style="font-size:.82rem;color:#071952;background:#F4FBFC;'
         f'border-radius:6px;padding:10px 14px;margin-bottom:8px;">'
-        f'Beban untuk kapasitas baru: <b>{_total_new_load:,.0f} ton/bln</b> '
-        f'(produk tak terserap {_need_new:,.0f} + pemindahan beban lini kritis '
+        f'Beban untuk kapasitas baru: <b>{_total_new:,.0f} ton/bln</b> '
+        f'(format tanpa lini {_unalloc_ton:,.0f} + pemindahan beban kritis '
         f'{_offload:,.0f}) &nbsp;|&nbsp; Format dibutuhkan: '
         f'<b>{"/".join(_fmt_need) if _fmt_need else "-"}</b></div>',
         unsafe_allow_html=True)
 
-    if _total_new_load <= 0:
-        st.info("Tidak ada beban tersisa untuk kapasitas baru."); return
+    if _total_new <= 0:
+        st.info("Tidak ada beban tersisa untuk kapasitas baru.")
+        return
 
     # Kandidat filler kompatibel format
     _fcands = []
     for mk, mm in machines.items():
-        if mm.get("role") != "Filling": continue
+        if mm.get("role") != "Filling":
+            continue
         _mf = set(mm.get("format_compat", []))
-        if _fmt_need and not set(_fmt_need).issubset(_mf): continue
+        if _fmt_need and not set(_fmt_need).issubset(_mf):
+            continue
         _cap = float(mm.get("capacity_ton_month", 0) or 0) * _cap_yield
-        if _cap > 0: _fcands.append((mk, mm, _cap))
+        if _cap > 0:
+            _fcands.append((mk, mm, _cap))
+
     if not _fcands:
-        st.warning(f"Tidak ada filler pada katalog yang mendukung format "
-                   f"{'/'.join(_fmt_need)}. Tambahkan di Parameter & Katalog Investasi.")
+        # Tidak ada mesin berformat ini → keputusan jujur: TETAP MAKLON
+        st.markdown(
+            f'<div style="border-left:5px solid #c0392b;background:#FCF7F7;'
+            f'border-radius:6px;padding:14px 20px;margin:14px 0;">'
+            f'<div style="font-size:1.05rem;font-weight:800;color:#c0392b;">'
+            f'TETAP MAKLON \u2014 format {"/".join(_fmt_need)}</div>'
+            f'<div style="font-size:.82rem;color:#071952;margin-top:4px;">'
+            f'Katalog belum memiliki filler yang menangani format '
+            f'{"/".join(_fmt_need)}, sehingga penarikan in-house tidak dapat '
+            f'dievaluasi. Volume {_total_new:,.0f} ton/bln pada format ini '
+            f'direkomendasikan <b>tetap diproduksi via maklon</b>. Tambahkan mesin '
+            f'berformat tersebut di Parameter & Katalog Investasi bila ingin '
+            f'menilai opsi insourcing.</div></div>', unsafe_allow_html=True)
         return
 
+    # Helper biaya paket
     def _pkg_overhead(ivk):
         return sum(o.get("pct", 0) for o in cat.get("capex_overhead_items", [])
                    if "all" in o.get("applies", ["all"]) or ivk in o.get("applies", []))
@@ -501,11 +629,24 @@ def render():
         return sum(o.get("annual", 0) for o in cat.get("opex_items", [])
                    if "all" in o.get("applies", ["all"]) or ivk in o.get("applies", []))
 
-    # Bangun opsi dari paket bermode new_line / multilane (yang relevan menambah kapasitas)
+    # Forward-looking NPV: manfaat = margin x volume ditarik (tumbuh g), di-cap kapasitas
+    def _fwd_fin(capex, opex, cap_new, vol0):
+        _st = []
+        for _t in range(1, _N + 1):
+            _vol = vol0 * ((1 + _g) ** _t)
+            _served = min(_vol, cap_new)            # cap ke kapasitas terpasang
+            _st.append(_served * 12 * _margin)
+        try:
+            return compute_financial(int(capex), 0,
+                {**params, "_benefit_stream": _st}, annual_opex_extra=opex)
+        except Exception:
+            return {"npv": 0, "irr_pct": 0, "payback_year": None}
+
+    # Bangun opsi dari paket bermode new_line / multilane
     _opts = []
     for ivk, iv in iv_pkgs.items():
         _mode = iv.get("mode", "replace")
-        if _mode == "replace":   # mengganti unit tidak menambah lini utk produk baru
+        if _mode == "replace":
             continue
         _extra = sum(float(machines.get(c["key"], {}).get("capex", 0)) * c.get("qty", 1)
                      for c in iv.get("components_extra", []))
@@ -513,34 +654,43 @@ def render():
         if _mode == "new_line":
             _best = None
             for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
-                _pu = _total_new_load / cap * 100
+                _pu = _total_new / cap * 100
                 if _pu <= _util_target + 5:
                     _best = (mk, mm, cap, 1, cap, _pu); break
             if _best is None:
                 mk, mm, cap = max(_fcands, key=lambda x: x[2])
-                _best = (mk, mm, cap, 1, cap, _total_new_load / cap * 100)
+                _best = (mk, mm, cap, 1, cap, _total_new / cap * 100)
         else:  # multilane
             _best = None
             for mk, mm, cap in sorted(_fcands, key=lambda x: x[2]):
                 for n in range(1, int(mm.get("multiline_lanes", 4)) + 1):
                     _eff = cap * n
-                    _pu = _total_new_load / _eff * 100
+                    _pu = _total_new / _eff * 100
                     if _pu <= _util_target + 5:
                         _c = (mk, mm, cap, n, _eff, _pu)
                         if _best is None or abs(_pu - _util_target) < abs(_best[5] - _util_target):
                             _best = _c
                         break
-            if _best is None: continue
+            if _best is None:
+                continue
         mk, mm, cap, _n, _eff, _pu = _best
         _capex = (mm.get("capex", 0) * _n + _extra) * _ohp + _fix
+        _opex_yr = (_pkg_opex(ivk)
+                    + float(mm.get("capex", 0)) * float(mm.get("opex_rate", 0.06)) * _n)
+        _fin = _fwd_fin(_capex, _opex_yr, _eff, _total_new)
         _opts.append({"jenis": iv.get("name", ivk), "key": ivk, "mode": _mode,
                       "mk": mk, "mm": mm, "lanes": _n, "eff": _eff, "pu": _pu,
-                      "capex": _capex, "layak_cap": _pu <= _util_target + 5})
+                      "capex": _capex, "opex_yr": _opex_yr,
+                      "layak_cap": _pu <= _util_target + 5,
+                      "npv": _fin.get("npv", 0), "fin": _fin})
+
     if not _opts:
         st.warning("Tidak ada paket investasi bermode lini baru / multijalur pada "
                    "katalog. Atur di Parameter & Katalog Investasi.")
         return
-    _opts.sort(key=lambda o: (not o["layak_cap"], o["capex"]))
+
+    # Peringkat: penuhi kapasitas dulu, lalu NPV forward-looking tertinggi
+    _opts.sort(key=lambda o: (not o["layak_cap"], -o["npv"]))
 
     st.dataframe(pd.DataFrame([{
         "Jenis Investasi": o["jenis"],
@@ -549,6 +699,7 @@ def render():
         "Kapasitas Efektif (ton/bln)": round(o["eff"], 0),
         "Proyeksi Util (%)": round(o["pu"], 1),
         "Memenuhi Kapasitas": "Ya" if o["layak_cap"] else "Tidak",
+        "NPV (forward-looking)": fmt_rp(o["npv"]),
         "Estimasi CAPEX": fmt_rp(o["capex"]),
     } for o in _opts]).style.map(
         lambda v: {"Ya": "color:#1a7f4b;font-weight:700",
@@ -559,35 +710,21 @@ def render():
     _pick = st.selectbox("Jenis investasi untuk analisis finansial:",
                          [o["jenis"] for o in _opts], index=0, key="pa_pick")
     _ch = next(o for o in _opts if o["jenis"] == _pick)
+    fin = _ch["fin"]
+    _irr = fin.get("irr_pct") or 0
+    _pb  = fin.get("payback_year")
+    _ok_npv = fin.get("npv", 0) >= 0
+    _ok_irr = _irr / 100 >= _min_irr
+    _ok_pb  = (_pb or 99) <= _pb_thr
+    _feas   = _ok_npv and _ok_irr and _ok_pb
 
-    # ── Kelayakan finansial — parameter penuh dari katalog ───────────────
-    _opex_yr = (_pkg_opex(_ch["key"])
-                + float(_ch["mm"].get("capex", 0)) * float(_ch["mm"].get("opex_rate", 0.06))
-                * _ch["lanes"])
-    _rf = float(params.get("realization_factor", 0.75))
-    _vol_yr = _total_new_load * 12
-    if _ccfg.get("benefit_apply_realization", True):
-        _vol_yr *= _rf
-    _benefit = _vol_yr * float(params.get("internal_value_per_ton", 2_100_000))
-    _p2 = dict(params); _p2["_benefit_override"] = _benefit
-    fin = compute_financial(_ch["capex"], _vol_yr, _p2, annual_opex_extra=_opex_yr)
-
-    _N      = int(params.get("project_lifetime_year", 5))
-    _irr    = fin.get("irr_pct") or 0
-    _roi_yr = fin.get("roi_pct", 0) / _N
-    _pb     = fin.get("payback_year")
-    _ok_npv = fin["npv"] >= 0
-    _ok_irr = _irr / 100 >= float(params.get("minimum_irr", 0.15))
-    _ok_pb  = (_pb or 99) <= int(params.get("payback_threshold_year", 3))
-    _feas   = _ok_npv and _ok_irr
-
-    kc = st.columns(5)
+    # KPI finansial
+    kc = st.columns(4)
     for col, lbl, val, ok in [
         (kc[0], "Total CAPEX", fmt_rp(_ch["capex"]), True),
-        (kc[1], "NPV", fmt_rp(fin["npv"]), _ok_npv),
-        (kc[2], "IRR", f"\u2265200%" if _irr > 200 else f"{_irr:.1f}%", _ok_irr),
-        (kc[3], "ROI/Tahun", f"{_roi_yr:.1f}%", _roi_yr >= 10),
-        (kc[4], "Payback", f"{_pb:.2f} thn" if _pb else "N/A", _ok_pb),
+        (kc[1], "NPV", fmt_rp(fin.get("npv", 0)), _ok_npv),
+        (kc[2], "IRR", (f"\u2265200%" if _irr > 200 else f"{_irr:.1f}%"), _ok_irr),
+        (kc[3], "Payback", (f"{_pb:.2f} thn" if _pb else "N/A"), _ok_pb),
     ]:
         clr = "#3fb950" if ok else "#f85149"
         with col:
@@ -596,48 +733,52 @@ def render():
                         f'<div class="kpi-value" style="color:{clr};font-size:1rem;">'
                         f'{val}</div></div>', unsafe_allow_html=True)
 
-    with st.expander("Transparansi Perhitungan", expanded=False):
-        st.caption("Langkah perhitungan dengan nilai aktual. Komposisi formula "
-                   "diatur pada Parameter & Katalog Investasi.")
-        _rows = []
-        for nm, frm, vl in fin.get("calc_steps", []):
-            if vl is None: vs = "-"
-            elif nm in ("IRR", "ROI per Tahun"): vs = f"{vl*100:.1f}%"
-            elif nm == "Payback Period": vs = f"{vl:.2f} thn" if vl else "Tidak tercapai"
-            else: vs = fmt_rp(vl)
-            _rows.append({"Komponen": nm, "Cara Hitung": frm, "Nilai": vs})
-        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+    st.caption(f"Dinilai forward-looking: pada pertumbuhan demand {_g*100:.0f}%/tahun "
+               f"sepanjang {_N} tahun, nilai manfaat Rp {_margin/1e6:,.0f} jt/ton. "
+               f"Manfaat di-cap pada kapasitas terpasang (kapasitas nganggur tidak "
+               f"dihitung). Catatan: bila biaya maklon riil tersedia, manfaat dapat "
+               f"diganti dengan selisih biaya maklon vs in-house.")
 
-    # ── Konklusi (selaras gaya Evaluasi Kapasitas) ───────────────────────
-    _cclr = "#1a7f4b" if _feas else "#c0392b"
-    _clbl = "LAYAK" if _feas else "TIDAK LAYAK"
-    _cfg_s = f'{_ch["lanes"]} jalur' if _ch["lanes"] > 1 else "Jalur tunggal"
-    st.markdown(f"""
-    <div class="dss-card" style="border:1px solid {_cclr};border-radius:12px;
-         padding:0;margin:1rem 0;overflow:hidden;">
-      <div style="display:flex;align-items:center;justify-content:space-between;
-           gap:12px;padding:14px 18px;background:#F8FDFB;">
-        <div>
-          <div class="kpi-label" style="letter-spacing:.12em;">KONKLUSI ALOKASI PRODUKSI</div>
-          <div style="font-size:1.0rem;font-weight:800;color:#071952;margin-top:2px;">
-            {len(sku_df)} produk \u00b7 {float(sku_df["Tonase (ton/bln)"].sum()):,.0f} ton/bln tambahan</div>
-        </div>
-        <span style="background:{_cclr};color:#fff;font-weight:700;
-              padding:6px 20px;border-radius:8px;font-size:.86rem;">{_clbl}</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 18px;
-           border-top:1px solid #E3EEF1;font-size:.8rem;color:#071952;">
-        <div style="flex:0 0 22%;font-weight:700;">Lini Baru</div>
-        <div style="flex:0 0 26%;">{_ch["jenis"]}</div>
-        <div style="flex:1 1 auto;">{_ch["mm"].get("full_name","")} \u00b7 {_cfg_s} \u00b7
-          {_ch["eff"]:,.0f} ton/bln</div>
-        <div style="flex:0 0 14%;">Util {_ch["pu"]:.1f}%</div>
-        <div style="flex:0 0 14%;text-align:right;font-weight:700;color:{_cclr};">
-          {fmt_rp(_ch["capex"])}</div>
-      </div>
-      <div style="padding:8px 18px;border-top:1px solid #E3EEF1;background:#FBFEFE;
-           font-size:.78rem;color:#071952;">
-        Menanggung {_total_new_load:,.0f} ton/bln (produk baru {_need_new:,.0f} +
-        pemindahan beban {_offload:,.0f}) \u00b7 Seluruh harga dan parameter mengikuti
-        menu Parameter & Katalog Investasi.</div>
-    </div>""", unsafe_allow_html=True)
+    # ── VERDICT 3-ARAH: TARIK / TAHAN / TETAP MAKLON ─────────────────────
+    if _feas:
+        _vclr, _vlbl = "#1a7f4b", "TARIK IN-HOUSE \u2014 Investasi Layak"
+        _vmsg = (f"Penarikan {_total_new:,.0f} ton/bln via {_ch['jenis']} layak: "
+                 f"NPV positif, IRR {_irr:.0f}% \u2265 {_min_irr*100:.0f}%, "
+                 f"payback {_pb:.1f} thn \u2264 {_pb_thr} thn. Investasi diamankan "
+                 f"dan margin ditangkap in-house.")
+    else:
+        # Titik impas volume: cari volume di mana NPV = 0 (naik seiring volume)
+        _cap_new = _ch["eff"]
+        _be_vol = None
+        _lo, _hi = _total_new, _cap_new
+        if _fwd_fin(_ch["capex"], _ch["opex_yr"], _cap_new, _hi).get("npv", 0) >= 0:
+            for _ in range(40):
+                _mid = (_lo + _hi) / 2.0
+                if _fwd_fin(_ch["capex"], _ch["opex_yr"], _cap_new, _mid).get("npv", 0) >= 0:
+                    _hi = _mid
+                else:
+                    _lo = _mid
+            _be_vol = _hi
+        if _be_vol is not None and _be_vol <= _cap_new * 1.001:
+            _pb_txt = f", payback {_pb:.1f} thn > {_pb_thr} thn" if _pb else ""
+            _vclr, _vlbl = "#d29922", "TAHAN \u2014 Evaluasi Ulang saat Demand Naik"
+            _vmsg = (f"Pada volume kini {_total_new:,.0f} ton/bln, penarikan belum "
+                     f"ekonomis (NPV negatif{_pb_txt}). "
+                     f"Penarikan menjadi <b>layak bila volume format "
+                     f"{'/'.join(_fmt_need)} mencapai \u2265 {_be_vol:,.0f} ton/bln</b> "
+                     f"(pada pertumbuhan {_g*100:.0f}%/tahun). Rekomendasi: pantau "
+                     f"demand, eksekusi investasi saat menembus ambang itu.")
+        else:
+            _vclr, _vlbl = "#c0392b", "TETAP MAKLON \u2014 Belum Ekonomis Diinsourcing"
+            _vmsg = (f"Investasi {fmt_rp(_ch['capex'])} untuk {_total_new:,.0f} "
+                     f"ton/bln tidak menutup biaya sepanjang umur, bahkan pada "
+                     f"kapasitas penuh {_cap_new:,.0f} ton/bln. Volume ini "
+                     f"direkomendasikan <b>tetap diproduksi via maklon</b> \u2014 "
+                     f"utilisasi tinggi saja tidak membenarkan belanja modal.")
+
+    st.markdown(
+        f'<div style="border-left:5px solid {_vclr};background:#F8FDFB;'
+        f'border-radius:6px;padding:14px 20px;margin:14px 0;">'
+        f'<div style="font-size:1.05rem;font-weight:800;color:{_vclr};">{_vlbl}</div>'
+        f'<div style="font-size:.82rem;color:#071952;margin-top:4px;">{_vmsg}</div>'
+        f'</div>', unsafe_allow_html=True)

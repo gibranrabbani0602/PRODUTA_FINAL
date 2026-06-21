@@ -4,10 +4,9 @@
       "name": "FILLER",
       "full_name": "Filler Sachet Multijalur",
       "capex": 4200000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 260000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 350,
-      "capacity_ton_month": 256,
+      "capacity_ton_month": 256.0,
       "format_compat": [
         "SSS"
       ],
@@ -20,10 +19,9 @@
       "name": "FILLER",
       "full_name": "Filler Stickpack Multijalur",
       "capex": 3800000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 220000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 120,
-      "capacity_ton_month": 88,
+      "capacity_ton_month": 88.0,
       "format_compat": [
         "STICKPACK"
       ],
@@ -36,10 +34,9 @@
       "name": "FILLER",
       "full_name": "Filler Universal Menengah",
       "capex": 4500000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 180000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 220,
-      "capacity_ton_month": 161,
+      "capacity_ton_month": 161.0,
       "format_compat": [
         "SSS",
         "BIB"
@@ -53,10 +50,9 @@
       "name": "FILLER",
       "full_name": "Filler Sachet Kompak",
       "capex": 2000000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 280000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 110,
-      "capacity_ton_month": 80,
+      "capacity_ton_month": 80.0,
       "format_compat": [
         "SSS"
       ],
@@ -69,10 +65,9 @@
       "name": "FILLER",
       "full_name": "Filler Sachet Standar",
       "capex": 3500000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 260000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 200,
-      "capacity_ton_month": 146,
+      "capacity_ton_month": 146.0,
       "format_compat": [
         "SSS"
       ],
@@ -85,10 +80,9 @@
       "name": "FILLER",
       "full_name": "Filler Universal Kompak",
       "capex": 3500000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 200000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 137,
-      "capacity_ton_month": 100,
+      "capacity_ton_month": 100.0,
       "format_compat": [
         "SSS",
         "BIB"
@@ -102,10 +96,9 @@
       "name": "FILLER",
       "full_name": "Filler Universal Standar",
       "capex": 5500000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 190000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 274,
-      "capacity_ton_month": 200,
+      "capacity_ton_month": 200.0,
       "format_compat": [
         "SSS",
         "BIB"
@@ -119,10 +112,9 @@
       "name": "FILLER",
       "full_name": "Filler Universal Besar",
       "capex": 7000000000,
-      "opex_rate": 0.09,
-      "opex_per_ton": 180000,
+      "opex_rate": 0.06,
       "capacity_kg_hr": 411,
-      "capacity_ton_month": 300,
+      "capacity_ton_month": 300.0,
       "format_compat": [
         "SSS",
         "BIB"
@@ -137,9 +129,8 @@
       "full_name": "Unit Dosing Auger",
       "capex": 650000000,
       "opex_rate": 0.06,
-      "opex_per_ton": 60000,
       "capacity_kg_hr": 250,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 182.5,
       "format_compat": [
         "SSS",
         "BIB"
@@ -153,9 +144,8 @@
       "full_name": "Unit Dosing Mikro",
       "capex": 280000000,
       "opex_rate": 0.06,
-      "opex_per_ton": 40000,
       "capacity_kg_hr": 80,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 58.4,
       "format_compat": [
         "SSS",
         "STICKPACK"
@@ -169,9 +159,8 @@
       "full_name": "Screw Feeder",
       "capex": 350000000,
       "opex_rate": 0.05,
-      "opex_per_ton": 30000,
       "capacity_kg_hr": 400,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 292.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -185,10 +174,9 @@
       "name": "CONVEYOR",
       "full_name": "Konveyor Inklinasi",
       "capex": 200000000,
-      "opex_rate": 0.05,
-      "opex_per_ton": 15000,
+      "opex_rate": 0.03,
       "capacity_kg_hr": 500,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 365.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -203,9 +191,8 @@
       "full_name": "Konveyor Sabuk",
       "capex": 150000000,
       "opex_rate": 0.05,
-      "opex_per_ton": 10000,
       "capacity_kg_hr": 600,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 438.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -220,9 +207,8 @@
       "full_name": "Konveyor Multijalur",
       "capex": 400000000,
       "opex_rate": 0.05,
-      "opex_per_ton": 18000,
       "capacity_kg_hr": 500,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 365.0,
       "format_compat": [
         "SSS"
       ],
@@ -235,9 +221,8 @@
       "full_name": "Checkweigher",
       "capex": 450000000,
       "opex_rate": 0.06,
-      "opex_per_ton": 55000,
       "capacity_kg_hr": 300,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 219.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -252,9 +237,8 @@
       "full_name": "Detektor X-Ray",
       "capex": 1200000000,
       "opex_rate": 0.06,
-      "opex_per_ton": 85000,
       "capacity_kg_hr": 250,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 182.5,
       "format_compat": [
         "SSS",
         "BIB",
@@ -268,10 +252,9 @@
       "name": "DISCHARGING",
       "full_name": "Unit Discharging",
       "capex": 900000000,
-      "opex_rate": 0.06,
-      "opex_per_ton": 25000,
+      "opex_rate": 0.04,
       "capacity_kg_hr": 500,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 365.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -285,10 +268,9 @@
       "name": "INFEED",
       "full_name": "Infeed Screw",
       "capex": 400000000,
-      "opex_rate": 0.05,
-      "opex_per_ton": 20000,
+      "opex_rate": 0.03,
       "capacity_kg_hr": 450,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 328.5,
       "format_compat": [
         "SSS",
         "BIB",
@@ -302,10 +284,9 @@
       "name": "FOLDING",
       "full_name": "Unit Folding",
       "capex": 700000000,
-      "opex_rate": 0.06,
-      "opex_per_ton": 30000,
+      "opex_rate": 0.05,
       "capacity_kg_hr": 400,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 292.0,
       "format_compat": [
         "SSS",
         "BIB"
@@ -318,10 +299,9 @@
       "name": "PACKING",
       "full_name": "Mesin Packing",
       "capex": 1600000000,
-      "opex_rate": 0.07,
-      "opex_per_ton": 45000,
+      "opex_rate": 0.05,
       "capacity_kg_hr": 400,
-      "capacity_ton_month": 0,
+      "capacity_ton_month": 292.0,
       "format_compat": [
         "SSS",
         "BIB",
@@ -334,20 +314,31 @@
   },
   "global_params": {
     "discount_rate": 0.13,
-    "project_lifetime_year": 5,
-    "payback_threshold_year": 3,
+    "project_lifetime_year": 7,
+    "payback_threshold_year": 7,
     "minimum_npv": 0,
     "minimum_irr": 0.15,
-    "minimum_roi": 0.25,
+    "minimum_roi": 0.04,
     "realization_factor": 0.75,
-    "internal_value_per_ton": 2100000,
+    "internal_value_per_ton": 10000000,
     "maklon_cost_per_ton": 6500000,
     "internal_cost_per_ton": 5000000,
     "tax_rate": 0.25,
-    "useful_life_year": 5,
+    "useful_life_year": 7,
     "maintenance_annual": 240000000,
     "inflation_rate": 0.03,
-    "maintenance_capex_pct": 0.008
+    "maintenance_capex_pct": 0.008,
+    "demand_growth_annual": 0.005,
+    "effective_capacity_factor": 0.91,
+    "calc_config": {},
+    "sensitivity_range_pct": 0.2,
+    "hpp": {
+      "bahan_baku": 58000000,
+      "tkl": 8500000,
+      "overhead": 18800000,
+      "total": 85300000
+    },
+    "effective_yield_pct": 97.6
   },
   "capex_overhead": {
     "Instalasi": 0.08,
@@ -532,13 +523,6 @@
   ],
   "opex_items": [
     {
-      "label": "Maintenance Lini",
-      "annual": 240000000,
-      "applies": [
-        "all"
-      ]
-    },
-    {
       "label": "Operator",
       "annual": 83200000,
       "applies": [
@@ -554,5 +538,29 @@
     }
   ],
   "opex_umr_monthly": 5558515,
-  "custom_params": {}
+  "custom_params": {},
+  "bfd_config": {
+    "basis_kg": 1000,
+    "upstream_label": "Blending",
+    "upstream_note": "Bubuk siap isi, per bin maks 1 ton",
+    "downstream_label": "Packing",
+    "downstream_note": "Pengemasan sekunder"
+  },
+  "stage_yields": {
+    "Discharging": 99.7,
+    "Feeding": 99.8,
+    "Dosing": 99.5,
+    "Filling": 99.5,
+    "Transfer": 99.9,
+    "Folding": 99.8,
+    "Inspeksi": 99.5,
+    "Packing": 99.7
+  },
+  "calc_config": {
+    "include_tax": true,
+    "include_inflation": true,
+    "include_maint_capex": true,
+    "payback_discounted": false,
+    "apply_yield_to_capacity": false
+  }
 }
