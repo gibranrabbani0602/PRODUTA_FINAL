@@ -3,7 +3,7 @@ import unicodedata
 import pandas as pd
 
 REQUIRED_OUTPUT_COLUMNS = [
-    "ItemName", "Qty", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
+    "Date","ItemName", "Qty", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
     "IsChocolate", "port_type", "Allergen", "ShelfLife", "MonthIndex"
 ]
 
@@ -97,7 +97,7 @@ def build_forecast_input_des(forecast_df, master_df, adjustment_pct=0.0, qty_def
         raise ValueError("SKU forecast belum ada di master SKU: " + ", ".join(missing[:30]))
     merged["Qty"] = int(qty_default)
     result = merged[REQUIRED_OUTPUT_COLUMNS].copy()
-    for extra in ["Date", "DescriptionForecast", "ForecastLow", "ForecastHigh", "ModelUsed", "MAPE", "WMAPE"]:
+    for extra in ["DescriptionForecast", "ForecastLow", "ForecastHigh", "ModelUsed", "MAPE", "WMAPE"]:
         if extra in merged.columns:
             result[extra] = merged[extra]
     return result.sort_values(["MonthIndex", "SkuId"]).reset_index(drop=True)
