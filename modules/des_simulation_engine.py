@@ -25,8 +25,6 @@ T_MINI_BLEND_ANMUM = 6
 
 SETUP_PORT_BERUBAH = 40
 SETUP_PORT_SAMA = 60
-TAHUN_SIMULASI = 2026
-HORIZON_HARI = 365
 
 DEFAULT_MAX_SCENARIOS = 100
 DEFAULT_CANDIDATE_WINDOW = 60
@@ -50,6 +48,7 @@ COLUMN_ALIASES = {
     "port_type": ["port_type", "port type", "port", "tipe port", "tipeport", "jenis port", "jenisport"],
     "Allergen": ["allergen", "alergen", "allergen level", "level allergen", "kode allergen", "kodealergen"],
     "ShelfLife": ["shelflife", "shelf life", "expired", "expiry", "umur simpan", "umursimpan", "masa simpan"],
+    "Date": ["date","ds","tanggal","forecast date","forecastdate","period date","perioddate"],
     "MonthIndex": ["monthindex", "month index", "month", "bulan", "periode", "period", "index bulan", "bulan produksi"],
     "Color": ["color", "colour", "warna", "color setup", "colorsetup", "warna setup", "warnasetup"],
 }
@@ -135,129 +134,453 @@ def translate_month_words(text):
         tokens.append(token)
     return " ".join(tokens)
 
+def parse_exact_date_value(value):
+    """
+    Membaca tanggal tanpa memaksa tahun tertentu.
 
-def month_start_day(month, year=TAHUN_SIMULASI):
-    try:
-        dt = pd.Timestamp(year=int(year), month=int(month), day=1)
-        return int(dt.dayofyear), dt.strftime("%Y-%m-%d")
-    except Exception:
-        return 1, f"{TAHUN_SIMULASI}-01-01"
+    Contoh yang dapat dibaca:
+    - 2026-04-01
+    - 01/04/2026
+    - 2026-04
+    - 04/2026
+    - April 2026
+    """
+    if value is None or pd.isna(value):
+        return pd.NaT
+
+    if isinstance(value, (pd.Timestamp, datetime, np.datetime64)):
+        return pd.Timestamp(value).normalize()
+
+    # Angka 1, 2, 3, ... bukan tanggal.
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return pd.NaT
+
+    text = translate_month_words(value)
+
+    if text in ["", "nan", "none", "null", "-"]:
+        return pd.NaT
+
+    formats = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%Y-%m",
+        "%Y/%m",
+        "%m-%Y",
+        "%m/%Y",
+        "%B %Y",
+        "%b %Y",
+    ]
+
+    for fmt in formats:
+        try:
+            return pd.Timestamp(
+                datetime.strptime(text.title(), fmt)
+            ).normalize()
+        except ValueError:
+            pass
+
+    # Jalan terakhir jika format tanggal tidak termasuk daftar di atas.
+    return pd.to_datetime(
+        text,
+        errors="coerce",
+        dayfirst=False,
+    )
 
 
-def parse_month_index_value(value, default_order=1):
-    if value is None or (isinstance(value, float) and np.isnan(value)) or pd.isna(value):
-        return {"MonthIndex": float(default_order), "MonthInputRaw": "", "MonthInputMode": "default_sequence", "MonthDueDate": "", "MonthDueDay": np.nan}
-    raw = value
-    if isinstance(value, (pd.Timestamp, datetime)):
-        dt = pd.to_datetime(value, errors="coerce")
-        if pd.notna(dt):
-            mapped = pd.Timestamp(year=TAHUN_SIMULASI, month=int(dt.month), day=int(dt.day))
-            return {"MonthIndex": float(mapped.dayofyear), "MonthInputRaw": str(raw), "MonthInputMode": "date", "MonthDueDate": mapped.strftime("%Y-%m-%d"), "MonthDueDay": float(mapped.dayofyear)}
-    text = str(value).strip()
-    if text == "" or text.casefold() in ["nan", "none", "null", "-"]:
-        return {"MonthIndex": float(default_order), "MonthInputRaw": text, "MonthInputMode": "default_sequence", "MonthDueDate": "", "MonthDueDay": np.nan}
-    if re.fullmatch(r"\d+(?:[.,]0+)?", text):
-        return {"MonthIndex": float(text.replace(",", ".")), "MonthInputRaw": text, "MonthInputMode": "sequence", "MonthDueDate": "", "MonthDueDay": np.nan}
-    text2 = translate_month_words(text)
-    m = re.fullmatch(r"(\d{1,2})[/-](\d{4})", text2)
-    if m:
-        day, due = month_start_day(int(m.group(1)))
-        return {"MonthIndex": float(day), "MonthInputRaw": text, "MonthInputMode": "month_date", "MonthDueDate": due, "MonthDueDay": float(day)}
-    m = re.fullmatch(r"(\d{4})[/-](\d{1,2})", text2)
-    if m:
-        day, due = month_start_day(int(m.group(2)))
-        return {"MonthIndex": float(day), "MonthInputRaw": text, "MonthInputMode": "month_date", "MonthDueDate": due, "MonthDueDay": float(day)}
-    norm_words = re.sub(r"[^a-zA-Z ]+", " ", text2).casefold().split()
-    for word in norm_words:
-        if word in MONTH_NUMBER_WORDS:
-            day, due = month_start_day(MONTH_NUMBER_WORDS[word])
-            return {"MonthIndex": float(day), "MonthInputRaw": text, "MonthInputMode": "month_date", "MonthDueDate": due, "MonthDueDay": float(day)}
-    dt = pd.to_datetime(text2, errors="coerce", dayfirst=True)
+def parse_period_date_value(value):
+    """
+    Mengubah tanggal menjadi tanggal pertama pada bulan tersebut.
+
+    Contoh:
+    15 April 2026 -> 1 April 2026
+    """
+    dt = parse_exact_date_value(value)
+
     if pd.isna(dt):
-        dt = pd.to_datetime(text2, errors="coerce", dayfirst=False)
-    if pd.notna(dt):
-        mapped = pd.Timestamp(year=TAHUN_SIMULASI, month=int(dt.month), day=int(dt.day))
-        return {"MonthIndex": float(mapped.dayofyear), "MonthInputRaw": text, "MonthInputMode": "date", "MonthDueDate": mapped.strftime("%Y-%m-%d"), "MonthDueDay": float(mapped.dayofyear)}
-    return {"MonthIndex": float(default_order), "MonthInputRaw": text, "MonthInputMode": "unparsed_default_sequence", "MonthDueDate": "", "MonthDueDay": np.nan}
+        return pd.NaT
+
+    return pd.Timestamp(
+        year=int(dt.year),
+        month=int(dt.month),
+        day=1,
+    )
+
+
+def build_simulation_calendar(forecast_df):
+    """
+    Membentuk kalender simulasi dari periode yang ada pada input.
+
+    Awal simulasi:
+    tanggal periode paling awal.
+
+    Akhir simulasi:
+    hari terakhir pada bulan periode terakhir.
+    """
+    if "Date" not in forecast_df.columns:
+        raise ValueError(
+            "Kolom Date belum tersedia sehingga kalender simulasi "
+            "tidak dapat dibentuk."
+        )
+
+    if forecast_df["Date"].isna().any():
+        raise ValueError(
+            "Sebagian tanggal periode kosong atau tidak dapat dibaca."
+        )
+
+    simulation_start = pd.Timestamp(
+        forecast_df["Date"].min()
+    ).normalize()
+
+    last_period = pd.Timestamp(
+        forecast_df["Date"].max()
+    ).normalize()
+
+    simulation_end = last_period + pd.offsets.MonthEnd(1)
+
+    calendar_dates = pd.date_range(
+        start=simulation_start,
+        end=simulation_end,
+        freq="D",
+    )
+
+    return simulation_start, simulation_end, calendar_dates
+
 
 
 def clean_prepared_input(df):
     df, matched = canonicalize_columns(df)
+
     if "IsChocolate" not in df.columns and "Color" in df.columns:
         df["IsChocolate"] = df["Color"]
-    missing = [c for c in REQUIRED_CONCEPTS if c not in df.columns]
+
+    missing = [
+        c for c in REQUIRED_CONCEPTS
+        if c not in df.columns
+    ]
+
     if missing:
-        available = ", ".join([str(c) for c in df.columns])
-        raise ValueError("ForecastInput belum lengkap. Kolom konsep yang belum terbaca: " + str(missing) + ". Kolom yang terbaca: " + available)
+        available = ", ".join(
+            [str(c) for c in df.columns]
+        )
+        raise ValueError(
+            "ForecastInput belum lengkap. "
+            "Kolom konsep yang belum terbaca: "
+            + str(missing)
+            + ". Kolom yang terbaca: "
+            + available
+        )
+
     for col, default_value in OPTIONAL_DEFAULTS.items():
         if col not in df.columns:
             df[col] = default_value
-    month_parsed = df["MonthIndex"].apply(parse_month_index_value).apply(pd.Series)
-    df["MonthInputRaw"] = month_parsed["MonthInputRaw"]
-    df["MonthInputMode"] = month_parsed["MonthInputMode"]
-    df["MonthDueDate"] = month_parsed["MonthDueDate"]
-    df["MonthDueDay"] = month_parsed["MonthDueDay"]
-    df["MonthIndex"] = month_parsed["MonthIndex"]
-    numeric_cols = ["Qty", "ForecastTon", "SkuGr", "SpeedD", "Speed", "Allergen", "ShelfLife", "MonthIndex"]
+
+    # --------------------------------------------------
+    # MEMBACA PERIODE
+    # --------------------------------------------------
+    # Jalur 1:
+    # Input hasil Demand & Forecasting memiliki kolom Date.
+    #
+    # Jalur 2:
+    # File lama dapat menyimpan tanggal pada kolom MonthIndex.
+    if "Date" in df.columns:
+        period_raw = df["Date"].copy()
+        period_source = "Date"
+    else:
+        period_raw = df["MonthIndex"].copy()
+        period_source = "MonthIndex"
+
+    df["MonthInputRaw"] = period_raw.astype(str)
+
+    df["Date"] = period_raw.apply(
+        parse_period_date_value
+    )
+
+    if df["Date"].isna().any():
+        bad_values = (
+            period_raw[df["Date"].isna()]
+            .astype(str)
+            .drop_duplicates()
+            .head(5)
+            .tolist()
+        )
+
+        raise ValueError(
+            "Tanggal periode tidak dapat dibaca dari kolom "
+            f"{period_source}. Contoh nilai bermasalah: "
+            + ", ".join(bad_values)
+            + ". Input harus memiliki kolom Date atau "
+              "MonthIndex yang berisi tanggal sebenarnya."
+        )
+
+    # Ambil daftar bulan yang unik dan urutkan.
+    unique_months = pd.DatetimeIndex(
+        sorted(df["Date"].drop_duplicates())
+    )
+
+    if len(unique_months) == 0:
+        raise ValueError(
+            "Tidak ada periode forecast yang dapat digunakan."
+        )
+
+    # Memastikan tidak ada bulan yang hilang di tengah horizon.
+    expected_months = pd.date_range(
+        start=unique_months.min(),
+        end=unique_months.max(),
+        freq="MS",
+    )
+
+    if not unique_months.equals(expected_months):
+        actual_set = set(unique_months)
+        missing_months = [
+            d.strftime("%Y-%m")
+            for d in expected_months
+            if d not in actual_set
+        ]
+
+        raise ValueError(
+            "Periode forecast tidak berurutan. "
+            "Bulan yang belum tersedia: "
+            + ", ".join(missing_months)
+        )
+
+    # April 2026 dapat menjadi 1,
+    # Mei 2026 menjadi 2,
+    # dan seterusnya sesuai input.
+    month_map = {
+        month: index + 1
+        for index, month in enumerate(unique_months)
+    }
+
+    simulation_start = unique_months.min()
+
+    df["MonthIndex"] = (
+        df["Date"]
+        .map(month_map)
+        .astype(int)
+    )
+
+    df["MonthInputMode"] = "calendar_date"
+
+    df["MonthDueDate"] = (
+        df["Date"]
+        .dt.strftime("%Y-%m-%d")
+    )
+
+    df["MonthDueDay"] = (
+        (df["Date"] - simulation_start).dt.days + 1
+    ).astype(int)
+
+    # --------------------------------------------------
+    # MEMBERSIHKAN KOLOM NUMERIK
+    # --------------------------------------------------
+    numeric_cols = [
+        "Qty",
+        "ForecastTon",
+        "SkuGr",
+        "SpeedD",
+        "Speed",
+        "Allergen",
+        "ShelfLife",
+        "MonthIndex",
+    ]
+
     for col in numeric_cols:
-        df[col] = to_numeric_safe(df[col]).fillna(0)
-    df["ItemName"] = df["ItemName"].astype(str).str.strip()
-    df["SkuId"] = df["SkuId"].astype(str).str.strip()
-    df["IsChocolate"] = df["IsChocolate"].apply(normalize_chocolate_value)
-    df["port_type"] = df["port_type"].astype(str).str.strip()
-    df["ColorForSetup"] = df["Color"].astype(str).apply(normalize_chocolate_value) if "Color" in df.columns else df["IsChocolate"]
-    df = df[df["ForecastTon"] > 0].reset_index(drop=True)
+        df[col] = (
+            to_numeric_safe(df[col])
+            .fillna(0)
+        )
+
+    df["ItemName"] = (
+        df["ItemName"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df["SkuId"] = (
+        df["SkuId"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df["IsChocolate"] = (
+        df["IsChocolate"]
+        .apply(normalize_chocolate_value)
+    )
+
+    df["port_type"] = (
+        df["port_type"]
+        .astype(str)
+        .str.strip()
+    )
+
+    if "Color" in df.columns:
+        df["ColorForSetup"] = (
+            df["Color"]
+            .astype(str)
+            .apply(normalize_chocolate_value)
+        )
+    else:
+        df["ColorForSetup"] = df["IsChocolate"]
+
+    df = (
+        df[df["ForecastTon"] > 0]
+        .reset_index(drop=True)
+    )
+
     if len(df) == 0:
-        raise ValueError("ForecastInput terbaca, tetapi semua ForecastTon kosong atau 0.")
+        raise ValueError(
+            "ForecastInput terbaca, tetapi semua "
+            "ForecastTon kosong atau 0."
+        )
+
     return df
 
 
-def parse_holiday_dates(text, year=TAHUN_SIMULASI):
+def parse_holiday_dates(
+    text,
+    simulation_start,
+    simulation_end,
+):
     if text is None or str(text).strip() == "":
         return set()
-    dates = []
-    for c in str(text).replace("\n", ",").replace(";", ",").split(","):
-        c = c.strip()
-        if not c:
+
+    dates = set()
+
+    values = (
+        str(text)
+        .replace("\n", ",")
+        .replace(";", ",")
+        .split(",")
+    )
+
+    for value in values:
+        value = value.strip()
+
+        if not value:
             continue
-        try:
-            dt = pd.to_datetime(c)
-            if dt.year == year:
-                dates.append(int(dt.dayofyear))
-        except Exception:
-            pass
-    return set(dates)
+
+        dt = parse_exact_date_value(value)
+
+        if pd.isna(dt):
+            raise ValueError(
+                f"Tanggal libur tidak dapat dibaca: {value}"
+            )
+
+        dt = pd.Timestamp(dt).normalize()
+
+        if simulation_start <= dt <= simulation_end:
+            dates.add(dt)
+
+    return dates
 
 
-def make_holiday_set(holiday_cutoff_days, holiday_dates_text):
-    holiday_set = parse_holiday_dates(holiday_dates_text)
-    if len(holiday_set) == 0:
-        n = int(holiday_cutoff_days)
-        if n > 0:
-            step = max(1, HORIZON_HARI // n)
-            holiday_set = set([(i * step) + 1 for i in range(n) if (i * step) + 1 <= HORIZON_HARI])
-    return holiday_set
+def make_holiday_set(
+    calendar_dates,
+    holiday_cutoff_days,
+    holiday_dates_text,
+):
+    simulation_start = pd.Timestamp(
+        calendar_dates[0]
+    ).normalize()
 
+    simulation_end = pd.Timestamp(
+        calendar_dates[-1]
+    ).normalize()
 
-def make_monthly_downtime_set(downtime_days_per_month):
-    downtime_days_per_month = int(downtime_days_per_month or 0)
-    if downtime_days_per_month <= 0:
+    manual_dates = parse_holiday_dates(
+        holiday_dates_text,
+        simulation_start,
+        simulation_end,
+    )
+
+    # Jika pengguna memasukkan tanggal manual,
+    # gunakan tanggal manual tersebut.
+    if manual_dates:
+        return manual_dates
+
+    n = int(holiday_cutoff_days or 0)
+
+    if n <= 0:
         return set()
-    days = set()
-    for month in range(1, 13):
-        for day in range(1, downtime_days_per_month + 1):
-            try:
-                days.add(int(pd.Timestamp(year=TAHUN_SIMULASI, month=month, day=day).dayofyear))
-            except Exception:
-                pass
-    return days
+
+    n = min(n, len(calendar_dates))
+
+    # Mempertahankan konsep lama:
+    # jumlah hari libur disebarkan sepanjang horizon.
+    step = max(
+        1,
+        len(calendar_dates) // n,
+    )
+
+    indices = [
+        i * step
+        for i in range(n)
+        if i * step < len(calendar_dates)
+    ]
+
+    return {
+        pd.Timestamp(calendar_dates[i]).normalize()
+        for i in indices
+    }
 
 
-def is_line_working(calendar_day, days_per_week, holiday_day_set, downtime_day_set=None):
-    downtime_day_set = downtime_day_set or set()
-    if calendar_day in holiday_day_set or calendar_day in downtime_day_set:
+def make_monthly_downtime_set(
+    downtime_days_per_month,
+    calendar_dates,
+):
+    n = int(downtime_days_per_month or 0)
+
+    if n <= 0:
+        return set()
+
+    dates = pd.DatetimeIndex(
+        calendar_dates
+    ).normalize()
+
+    periods = dates.to_period("M")
+    downtime_dates = set()
+
+    for period in periods.unique():
+        month_dates = dates[periods == period]
+
+        for dt in month_dates[:n]:
+            downtime_dates.add(
+                pd.Timestamp(dt).normalize()
+            )
+
+    return downtime_dates
+
+
+def is_line_working(
+    calendar_date,
+    days_per_week,
+    holiday_date_set,
+    downtime_date_set=None,
+):
+    downtime_date_set = downtime_date_set or set()
+
+    calendar_date = pd.Timestamp(
+        calendar_date
+    ).normalize()
+
+    if (
+        calendar_date in holiday_date_set
+        or calendar_date in downtime_date_set
+    ):
         return False
-    return ((calendar_day - 1) % 7) < int(days_per_week)
+
+    # weekday():
+    # Senin = 0
+    # Selasa = 1
+    # ...
+    # Minggu = 6
+    #
+    # 5D = Senin-Jumat
+    # 6D = Senin-Sabtu
+    # 7D = setiap hari
+    return calendar_date.weekday() < int(days_per_week)
 
 
 def estimate_scenario_count(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options):
@@ -353,15 +676,37 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     batch_mode = scenario["Batch Mode"]
     batch_limit_per_day = int(scenario["Batch Limit per Day"])
     growth = float(scenario["Growth"])
+
+    simulation_start, simulation_end, calendar_dates = (
+        build_simulation_calendar(forecast_df)
+    )
     target_demand = forecast_df["ForecastTon"].sum() * (1 + growth)
     jobs_df = expand_jobs(forecast_df, growth)
     if len(jobs_df) == 0:
         return {}, pd.DataFrame()
     unscheduled = jobs_df.to_dict("records")
     downtime_sets = {
-        "B": make_monthly_downtime_set(scenario.get("Line B Downtime Days/Month", 0)),
-        "G": make_monthly_downtime_set(scenario.get("Line G Downtime Days/Month", 0)),
-        "D": make_monthly_downtime_set(scenario.get("Line D Downtime Days/Month", 0)),
+        "B": make_monthly_downtime_set(
+            scenario.get(
+                "Line B Downtime Days/Month",
+                0,
+            ),
+            calendar_dates,
+        ),
+        "G": make_monthly_downtime_set(
+            scenario.get(
+                "Line G Downtime Days/Month",
+                0,
+            ),
+            calendar_dates,
+        ),
+        "D": make_monthly_downtime_set(
+            scenario.get(
+                "Line D Downtime Days/Month",
+                0,
+            ),
+            calendar_dates,
+        ),
     }
 
     # ── OPTIMIZATION: Precompute once per scenario ─────────────────────────────
@@ -374,8 +719,14 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     # 2. Working days set per line — O(1) lookup di inner loop
     _wd = {
         _ln: frozenset(
-            d for d in range(1, HORIZON_HARI + 1)
-            if is_line_working(d, _lc[_ln]["days"], holiday_day_set, downtime_sets[_ln])
+            pd.Timestamp(calendar_date).normalize()
+            for calendar_date in calendar_dates
+            if is_line_working(
+                calendar_date,
+                _lc[_ln]["days"],
+                holiday_day_set,
+                downtime_sets[_ln],
+            )
         )
         for _ln in ["B", "G", "D"]
     }
@@ -386,9 +737,19 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     planned_jobs = []
     seq = 1
 
-    for calendar_day in range(1, HORIZON_HARI + 1):
+    for calendar_day, calendar_date in enumerate(
+        calendar_dates,
+        start=1,
+    ):
+        calendar_date = pd.Timestamp(
+            calendar_date
+        ).normalize()
         # OPTIMIZATION: precompute active lines untuk hari ini (O(1) set lookup × 3)
-        active_lines = [l for l in ["B", "G", "D"] if calendar_day in _wd[l]]
+        active_lines = [
+            line
+            for line in ["B", "G", "D"]
+            if calendar_date in _wd[line]
+        ]
 
         for line in active_lines:
             line_state[line]["used_today"] = 0
@@ -432,7 +793,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             line_state[best_line]["last_allergen"] = job["Allergen"]
             line_state[best_line]["last_color"] = job["Color Setup"]
             planned_jobs.append({
-                "Scenario": scenario_code, "Sequence": seq, "Calendar Day": calendar_day, "Line": best_line,
+                "Scenario": scenario_code, "Sequence": seq, "Calendar Day": calendar_day, "Calendar Date": calendar_date.strftime("%Y-%m-%d"), "Line": best_line,
                 "Item Name": job["Item Name"], "SKU": job["SKU"], "Batch Ton": round(job["Batch Ton"], 4),
                 "Setup Minute": round(best_setup, 2), "Batching Note Minute": T_BATCH, "Prep Note Minute": T_PREP,
                 "Tip Note Minute": T_TIP, "Mini Blend Note Minute": job["Mini Blend Minute"], "Blend Note Minute": tblend,
@@ -460,6 +821,9 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     bottleneck = max(util_dict, key=util_dict.get)
     return {
         "Scenario": scenario_code,
+        "Simulation Start": simulation_start.strftime("%Y-%m-%d"),
+        "Simulation End": simulation_end.strftime("%Y-%m-%d"),
+        "Horizon Days": len(calendar_dates),
         "Line B Days": scenario["Line B Days"], "Line B Hours": scenario["Line B Hours"],
         "Line G Days": scenario["Line G Days"], "Line G Hours": scenario["Line G Hours"],
         "Line D Days": scenario["Line D Days"], "Line D Hours": scenario["Line D Hours"],
@@ -493,13 +857,34 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
     Jalankan DES simulation untuk semua skenario.
     Menggunakan parallel execution (joblib) untuk percepatan signifikan.
     """
-    forecast_df = clean_prepared_input(forecast_input_df)
-    scenario_df = generate_scenarios(
-        b_days_options, b_hours_options, g_days_options, g_hours_options,
-        d_days_options, d_hours_options, batch_options, growth_percent_options,
-        max_scenarios=max_scenarios, b_downtime=b_downtime, g_downtime=g_downtime, d_downtime=d_downtime,
+    forecast_df = clean_prepared_input(
+        forecast_input_df
     )
-    holiday_set = make_holiday_set(holiday_cutoff_days, holiday_dates_text)
+
+    simulation_start, simulation_end, calendar_dates = (
+        build_simulation_calendar(forecast_df)
+    )
+
+    scenario_df = generate_scenarios(
+        b_days_options,
+        b_hours_options,
+        g_days_options,
+        g_hours_options,
+        d_days_options,
+        d_hours_options,
+        batch_options,
+        growth_percent_options,
+        max_scenarios=max_scenarios,
+        b_downtime=b_downtime,
+        g_downtime=g_downtime,
+        d_downtime=d_downtime,
+    )
+
+    holiday_set = make_holiday_set(
+        calendar_dates,
+        holiday_cutoff_days,
+        holiday_dates_text,
+    )
 
     scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
     args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
@@ -544,7 +929,17 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
         result_df = result_df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
 
     planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
-    meta = {"scenarios_evaluated": len(result_df), "holiday_days": len(holiday_set), "products_analyzed": len(forecast_df)}
+    meta = {
+        "scenarios_evaluated": len(result_df),
+        "holiday_days": len(holiday_set),
+        "products_analyzed": len(forecast_df),
+        "simulation_start": simulation_start.strftime("%Y-%m-%d"),
+        "simulation_end": simulation_end.strftime("%Y-%m-%d"),
+        "horizon_days": len(calendar_dates),
+        "period_count": int(
+            forecast_df["MonthIndex"].nunique()
+        ),
+    }                       
     return result_df, scenario_df, planned_jobs_df, forecast_df, meta
 
 
