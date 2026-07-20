@@ -31,28 +31,72 @@ def _load_capacity_input_upload_or_default():
 def _summary_cards(result_df, meta):
     if result_df.empty:
         return
+
     best = result_df.iloc[0]
+
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Best Scenario", str(best["Scenario"])[:38])
-    c2.metric("Tons Finished", f"{best['Tons Finished']:,.2f}")
-    c3.metric("Unmet Demand", f"{best['Unmet Demand Ton']:,.2f}")
-    c4.metric("Finished Ratio", f"{best['Finished Ratio (%)']:,.2f}%")
-    c5.metric("Bottleneck", best["Bottleneck Area"])
+
+    c1.metric(
+        "Best Scenario",
+        str(best["Scenario"])[:38],
+    )
+
+    c2.metric(
+        "Tons Finished",
+        f"{best['Tons Finished']:,.2f}",
+    )
+
+    c3.metric(
+        "Unmet Demand",
+        f"{best['Unmet Demand Ton']:,.2f}",
+    )
+
+    c4.metric(
+        "Finished Ratio",
+        f"{best['Finished Ratio (%)']:,.2f}%",
+    )
+
+    c5.metric(
+        "Highest Utilization",
+        best["Bottleneck Area"],
+    )
+
     holiday_value = best.get(
         "Holiday Days",
         meta.get("holiday_days", 0),
     )
-    
+
     holiday_days = (
         0
         if pd.isna(holiday_value)
         else int(holiday_value)
     )
-    
+
+    sku_count = int(
+        meta.get("sku_analyzed", 0)
+    )
+
+    input_records = int(
+        meta.get("input_records", 0)
+    )
+
+    period_count = int(
+        meta.get("period_count", 0)
+    )
+
+    scenario_count = int(
+        meta.get(
+            "scenarios_evaluated",
+            len(result_df),
+        )
+    )
+
     st.success(
-        f"Simulation completed · Products: "
-        f"{meta.get('products_analyzed', 0):,} · "
-        f"Scenarios evaluated: {len(result_df):,} · "
+        f"Simulation completed · "
+        f"SKU analyzed: {sku_count:,} · "
+        f"Input records: {input_records:,} · "
+        f"Periods: {period_count:,} · "
+        f"Scenarios evaluated: {scenario_count:,} · "
         f"Holiday days: {holiday_days:,}"
     )
 
@@ -291,7 +335,49 @@ def render():
         warning("Belum ada hasil simulation. Jalankan <b>Run DES Simulation</b> setelah input tersedia.")
         return
 
-    _summary_cards(result_df, {"products_analyzed": len(input_df) if input_df is not None else 0, "holiday_days": holiday_cutoff})
+    if (
+        input_df is not None
+        and not input_df.empty
+    ):
+        sku_count = (
+            int(input_df["SkuId"].nunique())
+            if "SkuId" in input_df.columns
+            else 0
+        )
+
+        input_record_count = int(
+            len(input_df)
+        )
+
+        period_count = (
+            int(input_df["MonthIndex"].nunique())
+            if "MonthIndex" in input_df.columns
+            else 0
+        )
+
+    else:
+        sku_count = 0
+        input_record_count = 0
+        period_count = 0
+
+    summary_meta = {
+        "sku_analyzed": sku_count,
+        "input_records": input_record_count,
+        "period_count": period_count,
+        "scenarios_evaluated": len(result_df),
+        "holiday_days": int(
+            result_df.iloc[0].get(
+                "Holiday Days",
+                0,
+            )
+        ),
+    }
+
+    _summary_cards(
+        result_df,
+        summary_meta,
+    )
+    
     data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input", "Charts", "Export Result"])
     with data_tabs[0]:
         st.dataframe(_disp(result_df), use_container_width=True, hide_index=True)
