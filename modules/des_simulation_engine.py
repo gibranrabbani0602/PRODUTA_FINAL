@@ -1041,19 +1041,41 @@ def run_des_simulation(
         result_df = result_df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
 
     planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
+    sku_count = (
+        int(forecast_df["SkuId"].nunique())
+        if "SkuId" in forecast_df.columns
+        else 0
+    )
+
+    input_record_count = int(
+        len(forecast_df)
+    )
+
+    period_count = (
+        int(forecast_df["MonthIndex"].nunique())
+        if "MonthIndex" in forecast_df.columns
+        else 0
+    )
+
     meta = {
         "scenarios_evaluated": len(result_df),
+
+        "sku_analyzed": sku_count,
+        "input_records": input_record_count,
+        "period_count": period_count,
+
         "holiday_days": len(holiday_set),
         "holiday_mode": holiday_mode,
         "holiday_dates": holiday_dates_used,
-        "products_analyzed": len(forecast_df),
-        "simulation_start": simulation_start.strftime("%Y-%m-%d"),
-        "simulation_end": simulation_end.strftime("%Y-%m-%d"),
-        "horizon_days": len(calendar_dates),
-        "period_count": int(
-            forecast_df["MonthIndex"].nunique()
+
+        "simulation_start": simulation_start.strftime(
+            "%Y-%m-%d"
         ),
-    }                       
+        "simulation_end": simulation_end.strftime(
+            "%Y-%m-%d"
+        ),
+        "horizon_days": len(calendar_dates),
+    }                      
     return result_df, scenario_df, planned_jobs_df, forecast_df, meta
 
 
