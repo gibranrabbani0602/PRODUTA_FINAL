@@ -443,10 +443,17 @@ def parse_holiday_dates(
     simulation_start,
     simulation_end,
 ):
+    """
+    Membaca daftar tanggal libur manual.
+
+    Contoh input:
+    2026-04-10, 2026-05-01, 2026-12-25
+    """
     if text is None or str(text).strip() == "":
         return set()
 
     dates = set()
+    outside_horizon = []
 
     values = (
         str(text)
@@ -472,15 +479,80 @@ def parse_holiday_dates(
 
         if simulation_start <= dt <= simulation_end:
             dates.add(dt)
+        else:
+            outside_horizon.append(
+                dt.strftime("%Y-%m-%d")
+            )
+
+    if outside_horizon:
+        raise ValueError(
+            "Tanggal libur berikut berada di luar horizon simulasi: "
+            + ", ".join(outside_horizon)
+        )
 
     return dates
 
 
+def make_estimated_holiday_set(
+    calendar_dates,
+    holiday_count,
+):
+    """
+    Membentuk estimasi hari tutup produksi secara deterministik.
+
+    Hari tutup ditempatkan merata pada Senin-Jumat agar
+    benar-benar menjadi tambahan kehilangan hari produksi,
+    bukan bertumpuk dengan hari Minggu yang mungkin memang
+    sudah tidak digunakan oleh beberapa lini.
+    """
+    n = int(holiday_count or 0)
+
+    if n <= 0:
+        return set()
+
+    calendar_index = pd.DatetimeIndex(
+        calendar_dates
+    ).normalize()
+
+    # Senin = 0 sampai Jumat = 4
+    eligible_dates = calendar_index[
+        calendar_index.weekday < 5
+    ]
+
+    if n > len(eligible_dates):
+        raise ValueError(
+            "Jumlah hari libur estimasi melebihi jumlah "
+            "hari kerja yang tersedia dalam horizon."
+        )
+
+    # Mengambil titik tengah dari n bagian horizon.
+    # Cara ini tidak otomatis memilih hari pertama.
+    selected_indices = np.floor(
+        (np.arange(n) + 0.5)
+        * len(eligible_dates)
+        / n
+    ).astype(int)
+
+    return {
+        pd.Timestamp(
+            eligible_dates[index]
+        ).normalize()
+        for index in selected_indices
+    }
+
+
 def make_holiday_set(
     calendar_dates,
-    holiday_cutoff_days,
-    holiday_dates_text,
+    holiday_mode="none",
+    holiday_cutoff_days=0,
+    holiday_dates_text="",
 ):
+    """
+    Mode hari libur:
+    - none      : tidak ada hari libur tambahan
+    - manual    : memakai tanggal yang dimasukkan pengguna
+    - estimated : membentuk estimasi berdasarkan jumlah hari
+    """
     simulation_start = pd.Timestamp(
         calendar_dates[0]
     ).normalize()
@@ -489,11 +561,37 @@ def make_holiday_set(
         calendar_dates[-1]
     ).normalize()
 
-    manual_dates = parse_holiday_dates(
-        holiday_dates_text,
-        simulation_start,
-        simulation_end,
-    )
+    mode = str(
+        holiday_mode or "none"
+    ).strip().lower()
+
+    if mode == "none":
+        return set()
+
+    if mode == "manual":
+        manual_dates = parse_holiday_dates(
+            holiday_dates_text,
+            simulation_start,
+            simulation_end,
+        )
+
+        if not manual_dates:
+            raise ValueError(
+                "Mode tanggal libur manual dipilih, "
+                "tetapi belum ada tanggal yang dimasukkan."
+            )
+
+        return manual_dates
+
+    if mode == "estimated":
+        return make_estimated_holiday_set(
+            calendar_dates,
+            holiday_cutoff_days,
+        )
+
+    raise ValueError(
+        f"Mode hari libur tidak dikenali: {holiday_mode}"
+    )    
 
     # Jika pengguna memasukkan tanggal manual,
     # gunakan tanggal manual tersebut.
@@ -823,6 +921,20 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         "Scenario": scenario_code,
         "Simulation Start": simulation_start.strftime("%Y-%m-%d"),
         "Simulation End": simulation_end.strftime("%Y-%m-%d"),
+        "Holiday Mode": scenario.get(
+            "Holiday Mode",
+            "none",
+        ),
+        "Holiday Days": int(
+            scenario.get(
+                "Holiday Days",
+                0,
+            )
+        ),
+        "Holiday Dates": scenario.get(
+            "Holiday Dates",
+            "",
+        ),
         "Horizon Days": len(calendar_dates),
         "Line B Days": scenario["Line B Days"], "Line B Hours": scenario["Line B Hours"],
         "Line G Days": scenario["Line G Days"], "Line G Hours": scenario["Line G Hours"],
@@ -845,14 +957,29 @@ def _run_single(args):
     forecast_df, scenario_dict, holiday_set = args
     scenario = pd.Series(scenario_dict)
     return simulate_one_scenario(forecast_df, scenario, holiday_set, DEFAULT_CANDIDATE_WINDOW)
-
-
-def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_days_options, g_hours_options,
-                       d_days_options, d_hours_options, batch_options, growth_percent_options,
-                       holiday_cutoff_days=16, holiday_dates_text="", max_scenarios=DEFAULT_MAX_SCENARIOS,
-                       b_downtime=0, g_downtime=0, d_downtime=0,
-                       # Backward-compat: availability params diterima tapi diabaikan
-                       b_availability=100, g_availability=100, d_availability=100):
+                     
+def run_des_simulation(
+    forecast_input_df,
+    b_days_options,
+    b_hours_options,
+    g_days_options,
+    g_hours_options,
+    d_days_options,
+    d_hours_options,
+    batch_options,
+    growth_percent_options,
+    holiday_cutoff_days=0,
+    holiday_dates_text="",
+    max_scenarios=DEFAULT_MAX_SCENARIOS,
+    b_downtime=0,
+    g_downtime=0,
+    d_downtime=0,
+    holiday_mode="none",
+    # Backward-compat: availability diterima tetapi diabaikan
+    b_availability=100,
+    g_availability=100,
+    d_availability=100,
+):
     """
     Jalankan DES simulation untuk semua skenario.
     Menggunakan parallel execution (joblib) untuk percepatan signifikan.
@@ -881,11 +1008,23 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
     )
 
     holiday_set = make_holiday_set(
-        calendar_dates,
-        holiday_cutoff_days,
-        holiday_dates_text,
-    )
+    calendar_dates,
+    holiday_mode=holiday_mode,
+    holiday_cutoff_days=holiday_cutoff_days,
+    holiday_dates_text=holiday_dates_text,
+)
+    holiday_dates_used = sorted(
+    pd.Timestamp(date).strftime("%Y-%m-%d")
+    for date in holiday_set
+)
 
+holiday_dates_text_used = ", ".join(
+    holiday_dates_used
+)
+
+scenario_df["Holiday Mode"] = holiday_mode
+scenario_df["Holiday Days"] = len(holiday_set)
+scenario_df["Holiday Dates"] = holiday_dates_text_used
     scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
     args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
 
@@ -932,6 +1071,8 @@ def run_des_simulation(forecast_input_df, b_days_options, b_hours_options, g_day
     meta = {
         "scenarios_evaluated": len(result_df),
         "holiday_days": len(holiday_set),
+        "holiday_mode": holiday_mode,
+        "holiday_dates": holiday_dates_used,
         "products_analyzed": len(forecast_df),
         "simulation_start": simulation_start.strftime("%Y-%m-%d"),
         "simulation_end": simulation_end.strftime("%Y-%m-%d"),
