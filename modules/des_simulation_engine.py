@@ -592,38 +592,7 @@ def make_holiday_set(
     raise ValueError(
         f"Mode hari libur tidak dikenali: {holiday_mode}"
     )    
-
-    # Jika pengguna memasukkan tanggal manual,
-    # gunakan tanggal manual tersebut.
-    if manual_dates:
-        return manual_dates
-
-    n = int(holiday_cutoff_days or 0)
-
-    if n <= 0:
-        return set()
-
-    n = min(n, len(calendar_dates))
-
-    # Mempertahankan konsep lama:
-    # jumlah hari libur disebarkan sepanjang horizon.
-    step = max(
-        1,
-        len(calendar_dates) // n,
-    )
-
-    indices = [
-        i * step
-        for i in range(n)
-        if i * step < len(calendar_dates)
-    ]
-
-    return {
-        pd.Timestamp(calendar_dates[i]).normalize()
-        for i in indices
-    }
-
-
+   
 def make_monthly_downtime_set(
     downtime_days_per_month,
     calendar_dates,
@@ -1008,25 +977,25 @@ def run_des_simulation(
     )
 
     holiday_set = make_holiday_set(
-    calendar_dates,
-    holiday_mode=holiday_mode,
-    holiday_cutoff_days=holiday_cutoff_days,
-    holiday_dates_text=holiday_dates_text,
-)
-    holiday_dates_used = sorted(
-    pd.Timestamp(date).strftime("%Y-%m-%d")
-    for date in holiday_set
-)
-
-holiday_dates_text_used = ", ".join(
-    holiday_dates_used
-)
-
-scenario_df["Holiday Mode"] = holiday_mode
-scenario_df["Holiday Days"] = len(holiday_set)
-scenario_df["Holiday Dates"] = holiday_dates_text_used
-    scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
-    args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
+        calendar_dates,
+        holiday_mode=holiday_mode,
+        holiday_cutoff_days=holiday_cutoff_days,
+        holiday_dates_text=holiday_dates_text,
+    )
+        holiday_dates_used = sorted(
+        pd.Timestamp(date).strftime("%Y-%m-%d")
+        for date in holiday_set
+    )
+    
+    holiday_dates_text_used = ", ".join(
+        holiday_dates_used
+    )
+    
+    scenario_df["Holiday Mode"] = holiday_mode
+    scenario_df["Holiday Days"] = len(holiday_set)
+    scenario_df["Holiday Dates"] = holiday_dates_text_used
+        scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
+        args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
 
     # ── Parallel execution ────────────────────────────────────────────────────
     # Gunakan joblib dengan backend loky (works on Windows + Linux).
