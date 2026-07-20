@@ -982,7 +982,7 @@ def run_des_simulation(
         holiday_cutoff_days=holiday_cutoff_days,
         holiday_dates_text=holiday_dates_text,
     )
-     holiday_dates_used = sorted(
+    holiday_dates_used = sorted(
         pd.Timestamp(date).strftime("%Y-%m-%d")
         for date in holiday_set
     )
@@ -997,7 +997,9 @@ def run_des_simulation(
         
     scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
     
-    args_list = [(forecast_df, sc, holiday_set) for sc in scenario_list]
+    args_list = [
+        (forecast_df, sc, holiday_set) for sc in scenario_list
+    ]
 
     # ── Parallel execution ────────────────────────────────────────────────────
     # Gunakan joblib dengan backend loky (works on Windows + Linux).
