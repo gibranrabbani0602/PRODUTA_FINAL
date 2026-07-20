@@ -38,8 +38,23 @@ def _summary_cards(result_df, meta):
     c3.metric("Unmet Demand", f"{best['Unmet Demand Ton']:,.2f}")
     c4.metric("Finished Ratio", f"{best['Finished Ratio (%)']:,.2f}%")
     c5.metric("Bottleneck", best["Bottleneck Area"])
-    st.success(f"Simulation completed · Products: {meta.get('products_analyzed', 0):,} · Scenarios evaluated: {len(result_df):,} · Holiday days: {meta.get('holiday_days', 0):,}")
-
+    holiday_value = best.get(
+        "Holiday Days",
+        meta.get("holiday_days", 0),
+    )
+    
+    holiday_days = (
+        0
+        if pd.isna(holiday_value)
+        else int(holiday_value)
+    )
+    
+    st.success(
+        f"Simulation completed · Products: "
+        f"{meta.get('products_analyzed', 0):,} · "
+        f"Scenarios evaluated: {len(result_df):,} · "
+        f"Holiday days: {holiday_days:,}"
+    )
 
 def _plot_outputs(result_df):
     if result_df.empty:
@@ -148,12 +163,74 @@ def render():
     with c4:
         max_scenarios = st.number_input("Max skenario", min_value=1, max_value=500, value=100, step=10)
 
-    h1, h2 = st.columns([1, 2])
-    with h1:
-        holiday_cutoff = st.slider("Jumlah hari libur tahunan", 0, 40, 16, 1)
-    with h2:
-        holiday_dates = st.text_area("Tanggal libur manual opsional", placeholder="Contoh: 2026-01-01, 2026-03-20, 2026-12-25", height=80)
-
+    st.markdown(
+        "<div class='section-title'>Kalender Hari Libur</div>",
+        unsafe_allow_html=True,
+    )
+    
+    holiday_mode_label = st.radio(
+        "Metode penetapan hari libur",
+        [
+            "Tanpa hari libur tambahan",
+            "Tanggal libur manual",
+            "Estimasi jumlah hari tutup produksi",
+        ],
+        horizontal=True,
+    )
+    
+    holiday_mode_map = {
+        "Tanpa hari libur tambahan": "none",
+        "Tanggal libur manual": "manual",
+        "Estimasi jumlah hari tutup produksi": "estimated",
+    }
+    
+    holiday_mode = holiday_mode_map[
+        holiday_mode_label
+    ]
+    
+    holiday_cutoff = 0
+    holiday_dates = ""
+    
+    if holiday_mode == "manual":
+        holiday_dates = st.text_area(
+            "Tanggal libur produksi",
+            placeholder=(
+                "Contoh: 2026-04-10, 2026-05-01, "
+                "2026-12-25, 2027-01-01"
+            ),
+            height=100,
+            help=(
+                "Pisahkan tanggal dengan koma, titik koma, "
+                "atau baris baru."
+            ),
+        )
+    
+        st.caption(
+            "Gunakan tanggal ketika kegiatan produksi benar-benar "
+            "ditutup. Tanggal harus berada di dalam horizon simulasi."
+        )
+    
+    elif holiday_mode == "estimated":
+        holiday_cutoff = st.slider(
+            "Jumlah hari tutup produksi yang diestimasi",
+            min_value=0,
+            max_value=40,
+            value=16,
+            step=1,
+        )
+    
+        st.caption(
+            "Tanggal akan disebarkan secara deterministik dan merata "
+            "pada hari Senin–Jumat sepanjang horizon simulasi. "
+            "Gunakan pilihan ini hanya ketika jumlah hari diketahui, "
+            "tetapi tanggal pastinya tidak tersedia."
+        )
+    
+    else:
+        st.info(
+            "Model tidak akan menambahkan hari libur di luar "
+            "jadwal kerja mingguan dan downtime lini."
+        )
     total_possible = estimate_scenario_count(b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options)
     st.caption(f"Estimasi kombinasi: {total_possible:,}. App menjalankan maksimal {int(max_scenarios):,} skenario.")
 
@@ -173,6 +250,14 @@ def render():
             if any(len(x) == 0 for x in [b_days, b_hours, g_days, g_hours, d_days, d_hours, batch_options, growth_options]):
                 st.error("Pilih minimal satu opsi pada setiap parameter.")
                 st.stop()
+            if (
+                holiday_mode == "manual"
+                and not holiday_dates.strip()
+            ):
+                st.error(
+                    "Masukkan minimal satu tanggal libur produksi."
+                )
+                st.stop()
             with st.spinner("Menjalankan DES simulation..."):
                 result_df, scenario_df, planned_jobs_df, input_df, meta = run_des_simulation(
                     forecast_input,
@@ -180,6 +265,7 @@ def render():
                     batch_options, growth_options,
                     holiday_cutoff_days=holiday_cutoff,
                     holiday_dates_text=holiday_dates,
+                    holiday_mode=holiday_mode,
                     max_scenarios=int(max_scenarios),
                     b_downtime=b_down, g_downtime=g_down, d_downtime=d_down,
                 )
@@ -223,7 +309,46 @@ def render():
             st.download_button("Download Excel Result", data=export_payload["bytes"], file_name=export_payload["name"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("Export belum tersedia. Run simulation terlebih dahulu.")
-
+    best_result = result_df.iloc[0]
+    
+    holiday_mode_used = str(
+        best_result.get(
+            "Holiday Mode",
+            "none",
+        )
+    )
+    
+    holiday_dates_used = str(
+        best_result.get(
+            "Holiday Dates",
+            "",
+        )
+    )
+    
+    holiday_mode_display = {
+        "none": "Tanpa hari libur tambahan",
+        "manual": "Tanggal manual",
+        "estimated": "Estimasi jumlah hari tutup produksi",
+    }.get(
+        holiday_mode_used,
+        holiday_mode_used,
+    )
+    
+    with st.expander(
+        "Lihat kalender hari libur yang digunakan"
+    ):
+        st.write(
+            f"**Metode:** {holiday_mode_display}"
+        )
+    
+        if holiday_dates_used:
+            st.write(
+                f"**Tanggal:** {holiday_dates_used}"
+            )
+        else:
+            st.write(
+                "**Tanggal:** tidak ada hari libur tambahan"
+            )
     # ── Export CSV Skenario untuk Capacity Planning ──────────────────────────────
     st.markdown("<div class='section-title'>Export CSV Skenario</div>", unsafe_allow_html=True)
     st.caption(
