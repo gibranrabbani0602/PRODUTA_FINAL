@@ -3,8 +3,20 @@ import unicodedata
 import pandas as pd
 
 REQUIRED_OUTPUT_COLUMNS = [
-    "Date","ItemName", "Qty", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
-    "IsChocolate", "port_type", "Allergen", "ShelfLife", "MonthIndex"
+    "Date",
+    "ItemName",
+    "Qty",
+    "SkuId",
+    "SKU_Alias",
+    "ForecastTon",
+    "SkuGr",
+    "SpeedD",
+    "Speed",
+    "IsChocolate",
+    "port_type",
+    "Allergen",
+    "ShelfLife",
+    "MonthIndex",
 ]
 
 
@@ -29,7 +41,126 @@ def _rename_alias(df, alias):
                 break
     return df.rename(columns=ren)
 
+def _format_gram_token(value):
+    """
+    Mengubah gramasi menjadi bagian kode alias.
 
+    Contoh:
+    1000.0 -> 1000
+    27.5   -> 27p5
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "NA"
+
+    if number.is_integer():
+        return str(int(number))
+
+    return (
+        f"{number:g}"
+        .replace(".", "p")
+    )
+
+
+def _ensure_sku_alias(df):
+    """
+    Memastikan setiap SKU mempunyai satu alias.
+
+    Alias dari master dipertahankan.
+    Jika kosong, aplikasi membuat alias umum:
+    SKU-001-1000
+    """
+    df = df.copy()
+
+    if "SKU_Alias" not in df.columns:
+        df["SKU_Alias"] = ""
+
+    df["SKU_Alias"] = (
+        df["SKU_Alias"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    sku_reference = (
+        df[
+            [
+                "SkuId",
+                "SkuGr",
+            ]
+        ]
+        .drop_duplicates(
+            subset=["SkuId"],
+            keep="first",
+        )
+        .sort_values(
+            by=["SkuId"],
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
+
+    generated_alias = {}
+
+    for sequence, row in sku_reference.iterrows():
+        sku_id = str(
+            row["SkuId"]
+        ).strip()
+
+        gram_token = _format_gram_token(
+            row["SkuGr"]
+        )
+
+        generated_alias[sku_id] = (
+            f"SKU-{sequence + 1:03d}-{gram_token}"
+        )
+
+    missing_alias = (
+        df["SKU_Alias"].eq("")
+        | df["SKU_Alias"].str.lower().isin(
+            [
+                "nan",
+                "none",
+                "null",
+            ]
+        )
+    )
+
+    df.loc[
+        missing_alias,
+        "SKU_Alias",
+    ] = (
+        df.loc[
+            missing_alias,
+            "SkuId",
+        ]
+        .astype(str)
+        .map(generated_alias)
+    )
+
+    duplicate_aliases = (
+        df.groupby("SKU_Alias")["SkuId"]
+        .nunique()
+    )
+
+    duplicate_aliases = duplicate_aliases[
+        duplicate_aliases > 1
+    ]
+
+    if not duplicate_aliases.empty:
+        raise ValueError(
+            "Terdapat SKU_Alias yang digunakan oleh "
+            "lebih dari satu SkuId: "
+            + ", ".join(
+                duplicate_aliases.index
+                .astype(str)
+                .tolist()[:20]
+            )
+        )
+
+    return df
+    
 def standardize_forecast(forecast_df):
     alias = {
         "SkuId": ["sku", "sku_id", "name", "kode sku", "item code", "material"],
@@ -63,6 +194,7 @@ def standardize_master(master_df):
     alias = {
         "ItemName": ["item name", "nama produk", "nama sku", "description", "deskripsi", "product"],
         "SkuId": ["sku", "sku id", "sku_id", "kode sku", "item code", "material"],
+        "SKU_Alias": ["sku alias", "sku_alias", "alias sku", "alias", "kode anonim", "kode samaran"],
         "SkuGr": ["sku gr", "sku gram", "gramasi", "grammage", "gram", "pack size"],
         "SpeedD": ["speed d", "speed line d", "ppm d", "line d speed"],
         "Speed": ["speed", "speed bg", "speed b/g", "speed b", "speed g", "ppm"],
@@ -82,7 +214,17 @@ def standardize_master(master_df):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["IsChocolate"] = df["IsChocolate"].astype(str).str.strip().str.lower()
     df["port_type"] = df["port_type"].astype(str).str.strip().str.upper()
-    df = df[df["SkuId"].str.len() > 0].drop_duplicates("SkuId", keep="first")
+    df = (
+        df[df["SkuId"].str.len() > 0]
+        .drop_duplicates(
+            "SkuId",
+            keep="first",
+        )
+        .reset_index(drop=True)
+    )
+
+    df = _ensure_sku_alias(df)
+
     return df
 
 
