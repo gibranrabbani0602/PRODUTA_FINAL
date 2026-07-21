@@ -37,12 +37,27 @@ REQUIRED_CONCEPTS = [
     "ItemName", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
     "IsChocolate", "port_type", "Allergen", "ShelfLife",
 ]
-OPTIONAL_DEFAULTS = {"Qty": 1, "MonthIndex": 1}
+OPTIONAL_DEFAULTS = {"Qty": 1, "MonthIndex": 1, "SKU_Alias": "", "DataRole": "evaluation"}
 
 COLUMN_ALIASES = {
     "ItemName": ["itemname", "item name", "nama sku", "namasku", "description", "deskripsi", "product", "product name", "namaproduk", "nama produk", "catatan sku", "catatansku"],
     "Qty": ["qty", "quantity", "jumlah", "jumlah batch", "jumlahbatch", "batch", "batches", "lot", "jumlah lot"],
     "SkuId": ["skuid", "sku id", "sku", "kode sku", "kodesku", "item code", "itemcode", "material", "material code"],
+    "SKU_Alias": [
+        "sku alias",
+        "sku_alias",
+        "alias sku",
+        "kode anonim",
+        "kode samaran",
+    ],
+
+    "DataRole": [
+        "data role",
+        "data_role",
+        "role",
+        "period role",
+        "jenis periode",
+    ],
     "ForecastTon": ["forecastton", "forecast ton", "forecast", "demand", "demand ton", "target demand ton", "targetdemandton", "ton", "tons", "tonase", "tonnage", "planned ton", "plannedton"],
     "SkuGr": ["skugr", "sku gr", "sku gram", "skugram", "gram", "gramasi", "grammage", "pack size", "packsize", "ukuran gram"],
     "SpeedD": ["speedd", "speed d", "speed line d", "speedlined", "ppm d", "ppmd", "line d speed"],
@@ -422,6 +437,58 @@ def clean_prepared_input(df):
         .astype(str)
         .str.strip()
     )
+
+    df["SKU_Alias"] = (
+        df["SKU_Alias"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    df["DataRole"] = (
+        df["DataRole"]
+        .fillna("evaluation")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    role_aliases = {
+        "forecast": "evaluation",
+        "main": "evaluation",
+        "evaluasi": "evaluation",
+        "historical": "initialization",
+        "history": "initialization",
+        "historis": "initialization",
+        "warmup": "initialization",
+        "warm-up": "initialization",
+    }
+
+    df["DataRole"] = (
+        df["DataRole"]
+        .replace(role_aliases)
+    )
+
+    valid_roles = {
+        "initialization",
+        "evaluation",
+    }
+
+    invalid_roles = sorted(
+        set(df["DataRole"].unique())
+        - valid_roles
+    )
+
+    if invalid_roles:
+        raise ValueError(
+            "DataRole hanya boleh berisi "
+            "'initialization' atau 'evaluation'. "
+            "Nilai yang tidak dikenali: "
+            + ", ".join(
+                str(value)
+                for value in invalid_roles
+            )
+        )
 
     df["IsChocolate"] = (
         df["IsChocolate"]
@@ -809,6 +876,14 @@ def expand_jobs(forecast_df, growth):
 
                     "Item Name": row["ItemName"],
                     "SKU": row["SkuId"],
+                    "SKU Alias": row.get(
+                        "SKU_Alias",
+                        "",
+                    ),
+                    "Data Role": row.get(
+                        "DataRole",
+                        "evaluation",
+                    ),
 
                     "Forecast Ton": monthly_demand_ton,
                     "Demand Month Ton": monthly_demand_ton,
@@ -1047,7 +1122,20 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             line_state[best_line]["last_color"] = job["Color Setup"]
             planned_jobs.append({
                 "Scenario": scenario_code, "Sequence": seq, "Calendar Day": calendar_day, "Calendar Date": calendar_date.strftime("%Y-%m-%d"), "Line": best_line,
-                "Item Name": job["Item Name"], "SKU": job["SKU"], "Batch Ton": round(job["Batch Ton"], 4),
+                "Item Name": job["Item Name"],
+                "SKU": job["SKU"],
+                "SKU Alias": job.get(
+                    "SKU Alias",
+                    "",
+                ),
+                "Data Role": job.get(
+                    "Data Role",
+                    "evaluation",
+                ),
+                "Batch Ton": round(
+                    job["Batch Ton"],
+                    4,
+                ),
                 "Setup Minute": round(best_setup, 2), "Batching Note Minute": T_BATCH, "Prep Note Minute": T_PREP,
                 "Tip Note Minute": T_TIP, "Mini Blend Note Minute": job["Mini Blend Minute"], "Blend Note Minute": tblend,
                 "Fill Minute": round(best_tfill, 2), "Used Capacity Minute": round(best_setup + best_tfill, 2),
