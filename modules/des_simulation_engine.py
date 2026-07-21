@@ -1192,11 +1192,66 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             })
             seq += 1
             count_batch_today += 1
-    planned_jobs_df = pd.DataFrame(planned_jobs)
-    tons_b, tons_g, tons_d = line_state["B"]["tons"], line_state["G"]["tons"], line_state["D"]["tons"]
-    finished_ton = tons_b + tons_g + tons_d
-    unmet_demand = max(target_demand - finished_ton, 0)
-    finished_ratio = finished_ton / target_demand * 100 if target_demand > 0 else 0
+    planned_jobs_df = pd.DataFrame(
+        planned_jobs
+    )
+
+    if planned_jobs_df.empty:
+        initialization_production = 0.0
+        evaluation_production = 0.0
+    else:
+        production_roles = (
+            planned_jobs_df["Data Role"]
+            .fillna("evaluation")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        initialization_production = (
+            planned_jobs_df.loc[
+                production_roles.eq(
+                    "initialization"
+                ),
+                "Batch Ton",
+            ]
+            .sum()
+        )
+
+        evaluation_production = (
+            planned_jobs_df.loc[
+                production_roles.eq(
+                    "evaluation"
+                ),
+                "Batch Ton",
+            ]
+            .sum()
+        )
+
+    total_production = (
+        initialization_production
+        + evaluation_production
+    )
+
+    tons_b = line_state["B"]["tons"]
+    tons_g = line_state["G"]["tons"]
+    tons_d = line_state["D"]["tons"]
+
+    finished_ton = evaluation_production
+
+    unmet_demand = max(
+        target_demand
+        - evaluation_production,
+        0,
+    )
+
+    finished_ratio = (
+        evaluation_production
+        / target_demand
+        * 100
+        if target_demand > 0
+        else 0
+    )
     # OPTIMIZATION: gunakan precomputed working days untuk total_available
     total_available = {
         line: len(_wd[line]) * _lc[line]["cap_mins"]
@@ -1239,7 +1294,30 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             target_demand,
             2,
         ),
-        "Target Demand Ton": round(target_demand, 2), "Planned Ton": round(finished_ton, 2), "Tons Finished": round(finished_ton, 2),
+        "Target Demand Ton": round(
+            target_demand,
+            2,
+        ),
+        "Initialization Production Ton": round(
+            initialization_production,
+            2,
+        ),
+        "Evaluation Production Ton": round(
+            evaluation_production,
+            2,
+        ),
+        "Total Production Ton": round(
+            total_production,
+            2,
+        ),
+        "Planned Ton": round(
+            evaluation_production,
+            2,
+        ),
+        "Tons Finished": round(
+            evaluation_production,
+            2,
+        ),
         "Planning Ratio (%)": round(finished_ratio, 2), "Finished Ratio (%)": round(finished_ratio, 2), "Unmet Demand Ton": round(unmet_demand, 2),
         "Tons B": round(tons_b, 2), "Tons G": round(tons_g, 2), "Tons D": round(tons_d, 2),
         "Util Filling B (%)": round(util_b, 2), "Util Filling G (%)": round(util_g, 2), "Util Filling D (%)": round(util_d, 2),
