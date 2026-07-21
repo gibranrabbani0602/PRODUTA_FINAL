@@ -996,8 +996,13 @@ def expand_jobs(forecast_df, growth):
             while demand_remaining > LOT_ROUNDING_EPSILON:
                 lot_number += 1
 
-                virtual_usable_until = (
+                virtual_production_date = (
                     due_date
+                    - pd.Timedelta(days=1)
+                )
+                
+                virtual_usable_until = (
+                    virtual_production_date
                     + pd.DateOffset(
                         months=usable_age_months
                     )
