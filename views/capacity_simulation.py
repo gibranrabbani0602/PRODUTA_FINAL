@@ -12,6 +12,9 @@ from modules.des_simulation_engine import (
     estimate_scenario_count,
     make_growth_options,
     DEFAULT_PLANNED_PREVIEW_ROWS,
+    WEEKDAY_LABELS,
+    ACTUAL_WEEKLY_HOURS,
+    MANAGEMENT_WEEKLY_HOURS,
 )
 from modules.inventory_backlog import (
     build_inventory_backlog_table,
@@ -195,25 +198,234 @@ def render():
     else:
         st.caption(f"Input source: {source_note}")
         st.dataframe(_disp(forecast_input, 120), use_container_width=True, hide_index=True)
-
-    st.markdown("<div class='section-title'>Konfigurasi Lini</div>", unsafe_allow_html=True)
+    
+    st.markdown(
+        "<div class='section-title'>Konfigurasi Lini</div>",
+        unsafe_allow_html=True,
+    )
+    
+    st.caption(
+        "Periode initialization selalu menggunakan kondisi operasi aktual. "
+        "Pilihan berikut hanya digunakan untuk periode evaluation."
+    )
+    
+    schedule_mode_label = st.radio(
+        "Pola jadwal periode evaluation",
+        [
+            "Kondisi aktual",
+            "Usulan manajemen",
+            "Jadwal khusus",
+        ],
+        horizontal=True,
+    )
+    
+    schedule_mode_map = {
+        "Kondisi aktual": "actual",
+        "Usulan manajemen": "management",
+        "Jadwal khusus": "custom",
+    }
+    
+    evaluation_schedule_mode = schedule_mode_map[
+        schedule_mode_label
+    ]
+    
+    evaluation_weekly_hours = None
+    
+    
+    def show_schedule_table(profile):
+        schedule_table = pd.DataFrame({
+            "Hari": WEEKDAY_LABELS,
+            "Line B (jam)": profile["B"],
+            "Line G (jam)": profile["G"],
+            "Line D (jam)": profile["D"],
+        })
+    
+        st.dataframe(
+            schedule_table,
+            width="stretch",
+            hide_index=True,
+        )
+    
+    
+    if evaluation_schedule_mode == "actual":
+        evaluation_weekly_hours = {
+            line: list(hours)
+            for line, hours in ACTUAL_WEEKLY_HOURS.items()
+        }
+    
+        st.info(
+            "Line B dan D beroperasi 16 jam pada Senin, Sabtu, "
+            "dan Minggu serta 24 jam pada Selasa–Jumat. "
+            "Line G beroperasi 16 jam setiap hari."
+        )
+    
+        show_schedule_table(
+            evaluation_weekly_hours
+        )
+    
+        # Nilai kompatibilitas untuk fungsi lama.
+        b_days, b_hours = [7], [16]
+        g_days, g_hours = [7], [16]
+        d_days, d_hours = [7], [16]
+    
+    
+    elif evaluation_schedule_mode == "management":
+        evaluation_weekly_hours = {
+            line: list(hours)
+            for line, hours in MANAGEMENT_WEEKLY_HOURS.items()
+        }
+    
+        st.info(
+            "Usulan manajemen: Line B dan G beroperasi "
+            "6 hari × 16 jam, sedangkan Line D "
+            "7 hari × 24 jam."
+        )
+    
+        show_schedule_table(
+            evaluation_weekly_hours
+        )
+    
+        b_days, b_hours = [6], [16]
+        g_days, g_hours = [6], [16]
+        d_days, d_hours = [7], [24]
+    
+    
+    else:
+        st.caption(
+            "Isi jam operasi setiap lini pada setiap hari. "
+            "Nilai 0 berarti lini tidak beroperasi."
+        )
+    
+        custom_default = pd.DataFrame({
+            "Hari": WEEKDAY_LABELS,
+            "Line B": ACTUAL_WEEKLY_HOURS["B"],
+            "Line G": ACTUAL_WEEKLY_HOURS["G"],
+            "Line D": ACTUAL_WEEKLY_HOURS["D"],
+        })
+    
+        custom_schedule = st.data_editor(
+            custom_default,
+            disabled=["Hari"],
+            hide_index=True,
+            width="stretch",
+            num_rows="fixed",
+            key="custom_weekly_schedule",
+        )
+    
+        for column in [
+            "Line B",
+            "Line G",
+            "Line D",
+        ]:
+            custom_schedule[column] = (
+                pd.to_numeric(
+                    custom_schedule[column],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .clip(lower=0, upper=24)
+            )
+    
+        evaluation_weekly_hours = {
+            "B": custom_schedule[
+                "Line B"
+            ].astype(float).tolist(),
+    
+            "G": custom_schedule[
+                "Line G"
+            ].astype(float).tolist(),
+    
+            "D": custom_schedule[
+                "Line D"
+            ].astype(float).tolist(),
+        }
+    
+        def summarize_custom_schedule(hours):
+            active_hours = [
+                float(value)
+                for value in hours
+                if float(value) > 0
+            ]
+    
+            active_days = len(active_hours)
+    
+            average_hours = (
+                sum(active_hours) / active_days
+                if active_days > 0
+                else 0.0
+            )
+    
+            return active_days, average_hours
+    
+        b_day_value, b_hour_value = (
+            summarize_custom_schedule(
+                evaluation_weekly_hours["B"]
+            )
+        )
+    
+        g_day_value, g_hour_value = (
+            summarize_custom_schedule(
+                evaluation_weekly_hours["G"]
+            )
+        )
+    
+        d_day_value, d_hour_value = (
+            summarize_custom_schedule(
+                evaluation_weekly_hours["D"]
+            )
+        )
+    
+        b_days, b_hours = [
+            b_day_value
+        ], [
+            b_hour_value
+        ]
+    
+        g_days, g_hours = [
+            g_day_value
+        ], [
+            g_hour_value
+        ]
+    
+        d_days, d_hours = [
+            d_day_value
+        ], [
+            d_hour_value
+        ]
+    
+    
+    st.markdown("**Downtime lini pada periode evaluation**")
+    
     bcol, gcol, dcol = st.columns(3)
+    
     with bcol:
-        st.markdown("**Line B**")
-        b_days  = st.multiselect("Hari kerja/minggu B", [5, 6, 7], default=[6], key="b_days")
-        b_hours = st.multiselect("Jam kerja/hari B", [8, 16, 24], default=[16], key="b_hours")
-        b_down  = st.number_input("Downtime B (hari/bulan)", 0, 10, 0, 1)
+        b_down = st.number_input(
+            "Downtime B (hari/bulan)",
+            min_value=0,
+            max_value=10,
+            value=0,
+            step=1,
+        )
+    
     with gcol:
-        st.markdown("**Line G**")
-        g_days  = st.multiselect("Hari kerja/minggu G", [5, 6, 7], default=[6], key="g_days")
-        g_hours = st.multiselect("Jam kerja/hari G", [8, 16, 24], default=[16], key="g_hours")
-        g_down  = st.number_input("Downtime G (hari/bulan)", 0, 10, 0, 1)
+        g_down = st.number_input(
+            "Downtime G (hari/bulan)",
+            min_value=0,
+            max_value=10,
+            value=0,
+            step=1,
+        )
+    
     with dcol:
-        st.markdown("**Line D**")
-        d_days  = st.multiselect("Hari kerja/minggu D", [5, 6, 7], default=[7], key="d_days")
-        d_hours = st.multiselect("Jam kerja/hari D", [8, 16, 24], default=[24], key="d_hours")
-        d_down  = st.number_input("Downtime D (hari/bulan)", 0, 10, 0, 1)
-    b_avail = g_avail = d_avail = 100  # Availability tetap 100% (dihapus dari UI)
+        d_down = st.number_input(
+            "Downtime D (hari/bulan)",
+            min_value=0,
+            max_value=10,
+            value=0,
+            step=1,
+        )
+    
+    b_avail = g_avail = d_avail = 100
 
     st.markdown("<div class='section-title'>Business Scenario</div>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
@@ -347,6 +559,12 @@ def render():
                     holiday_cutoff_days=holiday_cutoff,
                     holiday_dates_text=holiday_dates,
                     holiday_mode=holiday_mode,
+                    evaluation_schedule_mode=(
+                        evaluation_schedule_mode
+                    ),
+                    evaluation_weekly_hours=(
+                        evaluation_weekly_hours
+                    ),
                     max_scenarios=int(max_scenarios),
                     b_downtime=b_down, g_downtime=g_down, d_downtime=d_down,
                 )
