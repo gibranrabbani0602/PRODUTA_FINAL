@@ -41,7 +41,9 @@ from pathlib import Path
 from modules.session import get_state, set_state
 from modules.io_utils import read_table
 from modules.raw_volume_parser import parse_raw_volume
-
+from modules.des_input_builder import (
+    build_forecast_input_des,
+)
 # ─── Palet ───────────────────────────────────────────────────────────────────
 PKG_COLORS   = {"SSS": "#37B7C3", "BIB": "#071952", "STICKPACK": "#088395"}
 SEG_COLORS   = {"SMOOTH":"#088395","ERRATIC":"#37B7C3","INTERMITTENT":"#e6a817","LUMPY":"#c0392b"}
@@ -62,7 +64,9 @@ COL_LABELS = {
     "holiday_adjusted":"Koreksi Lebaran","segment":"Pola Permintaan",
     "p":"Interval Rata-rata (p)","CV Squared":"CV² (Variasi)","category":"Brand",
     "_pkg":"Jenis Kemasan","SkuId":"Kode SKU","ItemName":"Nama Produk",
-    "port_type":"Tipe Lini","Speed":"Kecepatan (ton/jam)","SpeedD":"Kecepatan Bersih",
+    "port_type": "Tipe Port",
+    "Speed": "Kecepatan Line B/G (kemasan/menit)",
+    "SpeedD": "Kecepatan Line D (kemasan/menit)",
     "ForecastTon":"Forecast (ton)","MonthIndex":"Periode",
 }
 
@@ -631,37 +635,24 @@ def _tab_des_input():
                 st.code(traceback.format_exc())
 
 
-def _build_des(fc_df, master, adj_pct, qty_def):
-    ma = master.copy()
-    cm = {}
-    for c in ma.columns:
-        cs = c.strip()
-        if cs in ["SkuId","sku","SKU","ItemCode"]: cm[c] = "SkuId"
-        elif cs == "ItemName": cm[c] = "ItemName"
-    ma = ma.rename(columns=cm)
-    if "SkuId" not in ma.columns:
-        raise ValueError("Master Data tidak memiliki kolom SkuId.")
-    fc = fc_df.copy()
-    fc["forecast"] = (fc["forecast"] * (1 + adj_pct/100)).clip(lower=0)
-    merged = fc.merge(ma, left_on="sku", right_on="SkuId", how="inner")
-    if merged.empty:
-        raise ValueError("Tidak ada SKU yang cocok. Cek kolom SkuId di Master Data.")
-    rows = []
-    for _, row in merged.iterrows():
-        ton = float(row.get("forecast",0))
-        rows.append({
-            "ItemName":row.get("ItemName",row.get("description","")),
-            "Qty":max(int(round(ton)),qty_def) if ton>0 else qty_def,
-            "SkuId":row.get("SkuId",row["sku"]),
-            "ForecastTon":round(ton,6),
-            "SkuGr":row.get("SkuGr",""), "SpeedD":row.get("SpeedD",0),
-            "Speed":row.get("Speed",0), "IsChocolate":row.get("IsChocolate",""),
-            "port_type":row.get("port_type",""), "Allergen":row.get("Allergen",""),
-            "ShelfLife":row.get("ShelfLife",""),
-            "MonthIndex":str(row.get("date",""))[:10],
-        })
-    return pd.DataFrame(rows)
+def _build_des(
+    fc_df,
+    master,
+    adj_pct,
+    qty_def,
+):
+    """
+    Membentuk input DES menggunakan builder resmi.
 
+    Master yang digunakan adalah Master Data Asil,
+    bukan master SKU untuk visualisasi demand.
+    """
+    return build_forecast_input_des(
+        forecast_df=fc_df,
+        master_df=master,
+        adjustment_pct=adj_pct,
+        qty_default=qty_def,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — VISUALISASI DEMAND
