@@ -43,6 +43,7 @@ from modules.io_utils import read_table
 from modules.raw_volume_parser import parse_raw_volume
 from modules.des_input_builder import (
     build_forecast_input_des,
+    build_combined_des_input,
 )
 # ─── Palet ───────────────────────────────────────────────────────────────────
 PKG_COLORS   = {"SSS": "#37B7C3", "BIB": "#071952", "STICKPACK": "#088395"}
@@ -301,6 +302,38 @@ def _tab_forecasting():
         )
 
     # ── C: Parameter & Run ───────────────────────────────────────────────
+    st.markdown(
+        "<div class='section-title'>"
+        "PERIODE INISIALISASI"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    use_initialization = st.checkbox(
+        "Gunakan 12 bulan kebutuhan aktual "
+        "sebelum forecast sebagai initialization",
+        value=True,
+        key="use_des_initialization",
+    )
+
+    if use_initialization:
+        if (
+            isinstance(
+                history_df,
+                pd.DataFrame,
+            )
+            and not history_df.empty
+        ):
+            st.success(
+                "Data historis tersedia dan akan "
+                "digunakan untuk membentuk kondisi awal."
+            )
+        else:
+            st.warning(
+                "Data historis belum tersedia. "
+                "Upload data historis pada tab "
+                "FORECASTING terlebih dahulu."
+            )
     st.markdown("<div class='section-title'>PARAMETER FORECAST</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1: method  = st.selectbox("Metode", ["Auto (Prophet + CrostonSBA)","Prophet","CrostonSBA"], key="fc_meth")
@@ -530,6 +563,9 @@ def _tab_forecasting():
 def _tab_des_input():
     st.markdown("<div class='section-title'>OUTPUT FORECAST</div>", unsafe_allow_html=True)
     fc_df  = get_state("forecast_output")
+    history_df = get_state(
+    "forecast_raw"
+    )
     has_fc = isinstance(fc_df, pd.DataFrame) and not fc_df.empty
 
     if has_fc:
@@ -614,8 +650,61 @@ def _tab_des_input():
     if st.button("Generate Input Simulasi DES", type="primary", key="btn_des"):
         try:
             with st.spinner("Membuat input simulasi..."):
-                result = _build_des(fc_df, master_asil, adj, qty)
+                result = _build_des(
+                    fc_df=fc_df,
+                    master=master_asil,
+                    history_df=history_df,
+                    use_initialization=use_initialization,
+                    adj_pct=adj,
+                    qty_def=qty,
+                )
             set_state("forecast_input_des", result)
+            role_counts = (
+                result["DataRole"]
+                .value_counts()
+                .to_dict()
+            )
+            
+            initialization_rows = int(
+                role_counts.get(
+                    "initialization",
+                    0,
+                )
+            )
+            
+            evaluation_rows = int(
+                role_counts.get(
+                    "evaluation",
+                    0,
+                )
+            )
+            
+            initialization_ton = (
+                result.loc[
+                    result["DataRole"]
+                    .eq("initialization"),
+                    "ForecastTon",
+                ]
+                .sum()
+            )
+            
+            evaluation_ton = (
+                result.loc[
+                    result["DataRole"]
+                    .eq("evaluation"),
+                    "ForecastTon",
+                ]
+                .sum()
+            )
+            
+            st.info(
+                f"Initialization: "
+                f"{initialization_rows:,} baris, "
+                f"{initialization_ton:,.2f} ton | "
+                f"Evaluation: "
+                f"{evaluation_rows:,} baris, "
+                f"{evaluation_ton:,.2f} ton."
+            )
             st.success(f"Input simulasi berhasil: {len(result):,} baris.")
             m1,m2,m3,m4 = st.columns(4)
             nm = result["MonthIndex"].nunique() if "MonthIndex" in result.columns else 1
@@ -634,26 +723,30 @@ def _tab_des_input():
             with st.expander("Detail"):
                 st.code(traceback.format_exc())
 
-
 def _build_des(
     fc_df,
     master,
+    history_df,
+    use_initialization,
     adj_pct,
     qty_def,
 ):
-    """
-    Membentuk input DES menggunakan builder resmi.
+    if use_initialization:
+        return build_combined_des_input(
+            forecast_df=fc_df,
+            master_df=master,
+            history_df=history_df,
+            initialization_months=12,
+            adjustment_pct=adj_pct,
+            qty_default=qty_def,
+        )
 
-    Master yang digunakan adalah Master Data Asil,
-    bukan master SKU untuk visualisasi demand.
-    """
     return build_forecast_input_des(
         forecast_df=fc_df,
         master_df=master,
         adjustment_pct=adj_pct,
         qty_default=qty_def,
-    )
-
+    )  
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — VISUALISASI DEMAND
 # ══════════════════════════════════════════════════════════════════════════════
