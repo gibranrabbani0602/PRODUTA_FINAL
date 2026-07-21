@@ -124,12 +124,53 @@ def _summary_cards(result_df, meta):
         f"Holiday days: {holiday_days:,}"
     )
 
+
 def _plot_outputs(result_df):
     if result_df.empty:
         return
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Production Output", "Line Utilization", "Heatmap", "Scenario Map", "Bottleneck"])
+
+    result_df = result_df.copy()
+
+    # Kompatibilitas untuk hasil simulasi lama yang
+    # belum memiliki kolom On-Time Unmet Demand Ton.
+    if "On-Time Unmet Demand Ton" not in result_df.columns:
+        if "Late Demand Ton" in result_df.columns:
+            result_df["On-Time Unmet Demand Ton"] = (
+                pd.to_numeric(
+                    result_df["Late Demand Ton"],
+                    errors="coerce",
+                )
+                .fillna(0.0)
+            )
+        else:
+            result_df["On-Time Unmet Demand Ton"] = 0.0
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        [
+            "Production Output",
+            "Line Utilization",
+            "Heatmap",
+            "Scenario Map",
+            "Bottleneck",
+        ]
+    )  
+
     with tab1:
-        fig_ton = px.bar(result_df, x="Scenario", y=["Tons Finished", "Unmet Demand Ton"], barmode="group", title="Tons Finished vs Unmet Demand", text_auto=".2s", color_discrete_sequence=["#004B83", "#55C3E8"])
+        fig_ton = px.bar(
+            result_df,
+            x="Scenario",
+            y=[
+                "Tons Finished",
+                "On-Time Unmet Demand Ton",
+            ],
+            barmode="group",
+            title="Tons Finished vs On-Time Unmet Demand",
+            text_auto=".2s",
+            color_discrete_sequence=[
+                "#004B83",
+                "#55C3E8",
+            ],
+        )
         fig_ton.update_layout(xaxis_tickangle=-45, height=540, plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig_ton, use_container_width=True)
     with tab2:
@@ -143,7 +184,22 @@ def _plot_outputs(result_df):
         fig_heatmap.update_layout(height=500, plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig_heatmap, use_container_width=True)
     with tab4:
-        fig_gap = px.scatter(result_df, x="Finished Ratio (%)", y="Unmet Demand Ton", size="Tons Finished", color="Bottleneck Area", hover_name="Scenario", title="Scenario Positioning", color_discrete_sequence=BLUE_SEQ)
+        fig_gap = px.scatter(
+            result_df,
+            x="Finished Ratio (%)",
+            y="On-Time Unmet Demand Ton",
+            size="Tons Finished",
+            color="Bottleneck Area",
+            hover_name="Scenario",
+            title="Scenario Positioning",
+            labels={
+                "Finished Ratio (%)": "Total Demand Fulfillment (%)",
+                "On-Time Unmet Demand Ton": (
+                    "Demand Belum Terpenuhi Saat Due Date (ton)"
+                ),
+            },
+            color_discrete_sequence=BLUE_SEQ,
+        )
         fig_gap.update_layout(height=520, plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig_gap, use_container_width=True)
     with tab5:
