@@ -2505,12 +2505,6 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     }, planned_jobs_df
 
 
-def _run_single(args):
-    """Helper untuk parallel execution. Harus top-level agar picklable."""
-    forecast_df, scenario_dict, holiday_set = args
-    scenario = pd.Series(scenario_dict)
-    return simulate_one_scenario(forecast_df, scenario, holiday_set, DEFAULT_CANDIDATE_WINDOW)
-                     
 def run_des_simulation(
     forecast_input_df,
     b_days_options,
@@ -2537,7 +2531,7 @@ def run_des_simulation(
 ):
     """
     Jalankan DES simulation untuk semua skenario.
-    Menggunakan parallel execution (joblib) untuk percepatan signifikan.
+    Menjalankan seluruh skenario secara berurutan agar aman pada keterbatasan RAM Streamlit Cloud.
     """
     forecast_df = clean_prepared_input(
         forecast_input_df
