@@ -63,25 +63,6 @@ def _format_gram_token(value):
         .replace(".", "p")
     )
 
-def _package_token(value):
-    """
-    Mengubah jenis kemasan menjadi kode pendek anonim.
-    """
-    key = _norm(value)
-
-    if "stick" in key:
-        return "STK"
-
-    if "sss" in key or "sachet" in key:
-        return "SSS"
-
-    if "bib" in key or "baginbox" in key:
-        return "BIB"
-
-    return "SKU"
-
-
-def ensure_sku_alias(df):
 
 def _package_token(value):
     """
