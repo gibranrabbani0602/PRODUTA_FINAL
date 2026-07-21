@@ -1567,94 +1567,27 @@ def assign_capacity_release_dates(
             else calendar_start
         )
 
-        available_bg = 0.0
-        available_d = 0.0
-
-        capacity_release_date = (
-            group_start_date
+        # Seluruh skenario memakai jendela perencanaan yang sama.
+        # Demand suatu bulan mulai boleh diproduksi sejak awal
+        # bulan tempat due date berada.
+        #
+        # Contoh:
+        # Demand April 2026 due 31 Maret 2026
+        # mulai dijadwalkan sejak 1 Maret 2026.
+        capacity_release_date = max(
+            pd.Timestamp(
+                group_start_date
+            ).normalize(),
+            pd.Timestamp(
+                due_date
+            )
+            .to_period("M")
+            .to_timestamp()
+            .normalize(),
         )
 
-        enough_capacity = False
-
-        dates_before_due = calendar_index[
-            (
-                calendar_index
-                >= group_start_date
-            )
-            & (
-                calendar_index
-                <= pd.Timestamp(due_date)
-            )
-        ]
-
-        for work_date in reversed(
-            dates_before_due
-        ):
-            work_date = pd.Timestamp(
-                work_date
-            ).normalize()
-
-            if (
-                work_date
-                in working_days_by_line["B"]
-            ):
-                available_bg += float(
-                    daily_capacity_minutes["B"].get(
-                        work_date,
-                        0.0,
-                    )
-                )
-
-            if (
-                work_date
-                in working_days_by_line["G"]
-            ):
-                available_bg += float(
-                    daily_capacity_minutes["G"].get(
-                        work_date,
-                        0.0,
-                    )
-                )
-
-            if (
-                work_date
-                in working_days_by_line["D"]
-            ):
-                available_d += float(
-                    daily_capacity_minutes["D"].get(
-                        work_date,
-                        0.0,
-                    )
-                )
-
-            total_available = (
-                available_bg
-                + available_d
-            )
-
-            dedicated_capacity_ok = (
-                available_bg
-                >= bg_only_work
-                and available_d
-                >= d_only_work
-            )
-
-            total_capacity_ok = (
-                total_available
-                >= total_work
-            )
-
-            if (
-                dedicated_capacity_ok
-                and total_capacity_ok
-            ):
-                capacity_release_date = (
-                    work_date
-                )
-
-                enough_capacity = True
-                break
-
+        enough_capacity = True
+        
         for job_index in due_group.index:
             shelf_life_months = int(
                 np.floor(
@@ -2065,8 +1998,8 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     "evaluation",
                 ),
                 "Batch Ton": round(
-                    job["Batch Ton"],
-                    4,
+                    float(job["Batch Ton"]),
+                    9,
                 ),
                 "Setup Minute": round(best_setup, 2), "Batching Note Minute": T_BATCH, "Prep Note Minute": T_PREP,
                 "Tip Note Minute": T_TIP, "Mini Blend Note Minute": job["Mini Blend Minute"], "Blend Note Minute": tblend,
@@ -2680,6 +2613,17 @@ def run_des_simulation(
                 "Util Filling D (%)",
             ]
         ].max(axis=1)
+        
+        result_df[
+            "Total Weekly Operating Hours"
+        ] = (
+            result_df["Line B Days"]
+            * result_df["Line B Hours"]
+            + result_df["Line G Days"]
+            * result_df["Line G Hours"]
+            + result_df["Line D Days"]
+            * result_df["Line D Hours"]
+        )
 
         result_df = (
             result_df.sort_values(
@@ -2689,12 +2633,14 @@ def run_des_simulation(
                     "Ending Backlog Ton",
                     "Late Demand Ton",
                     "Maximum Delay Days",
+                    "Total Weekly Operating Hours",
                     "Highest Utilization (%)",
                     "Scenario",
                 ],
                 ascending=[
                     False,
                     False,
+                    True,
                     True,
                     True,
                     True,
