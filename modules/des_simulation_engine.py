@@ -823,11 +823,12 @@ def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_
 
 def expand_jobs(forecast_df, growth):
     """
-    Membentuk lot produksi tetap 1 ton secara kumulatif
-    untuk setiap SKU.
+    Membentuk lot produksi tetap 1 ton per SKU dengan
+    mempertimbangkan demand, sisa stok virtual, dan shelf life.
 
-    Pertumbuhan diterapkan pada demand, bukan pada
-    ukuran lot. Setiap lot produksi tetap 1 ton.
+    Pertumbuhan hanya diterapkan pada periode evaluation.
+    Stok virtual digunakan dengan prinsip FEFO.
+    Lot baru dibuat ketika stok valid tidak cukup memenuhi demand.
     """
     jobs = []
 
@@ -882,8 +883,11 @@ def expand_jobs(forecast_df, growth):
 
     for sku_id, sku_df in grouped_skus:
         cumulative_demand_ton = 0.0
-        cumulative_lot_count = 0
         lot_number = 0
+
+        # Stok virtual hanya digunakan untuk menentukan
+        # berapa lot 1 ton yang perlu dibuat.
+        virtual_inventory = []
 
         sku_df = sku_df.sort_values(
             by=[
@@ -905,21 +909,78 @@ def expand_jobs(forecast_df, growth):
 
             cumulative_demand_ton += monthly_demand_ton
 
-            required_cumulative_lots = int(
-                np.ceil(
-                    (
-                        cumulative_demand_ton
-                        - LOT_ROUNDING_EPSILON
+            due_date = pd.to_datetime(
+                row.get(
+                    "MonthDueDate",
+                    "",
+                ),
+                errors="coerce",
+            )
+
+            if pd.isna(due_date):
+                due_date = (
+                    pd.Timestamp(row["Date"])
+                    - pd.Timedelta(days=1)
+                )
+
+            due_date = pd.Timestamp(
+                due_date
+            ).normalize()
+
+            shelf_life_months = int(
+                np.floor(
+                    max(
+                        float(row["ShelfLife"]),
+                        0.0,
                     )
-                    / FIXED_LOT_TON
                 )
             )
 
-            new_lot_count = max(
-                required_cumulative_lots
-                - cumulative_lot_count,
+            usable_age_months = max(
+                shelf_life_months
+                - MIN_REMAINING_SHELF_MONTHS,
                 0,
             )
+
+            # Buang stok virtual yang sudah tidak valid
+            # pada due date bulan ini.
+            virtual_inventory = [
+                lot
+                for lot in virtual_inventory
+                if (
+                    lot["remaining"] > LOT_ROUNDING_EPSILON
+                    and lot["usable_until"] >= due_date
+                )
+            ]
+
+            virtual_inventory.sort(
+                key=lambda lot: (
+                    lot["usable_until"],
+                    lot["lot_number"],
+                )
+            )
+
+            demand_remaining = monthly_demand_ton
+
+            # Gunakan stok valid yang paling cepat habis masa
+            # gunanya terlebih dahulu (FEFO).
+            for lot in virtual_inventory:
+                if demand_remaining <= LOT_ROUNDING_EPSILON:
+                    break
+
+                used_ton = min(
+                    demand_remaining,
+                    lot["remaining"],
+                )
+
+                demand_remaining -= used_ton
+                lot["remaining"] -= used_ton
+
+            virtual_inventory = [
+                lot
+                for lot in virtual_inventory
+                if lot["remaining"] > LOT_ROUNDING_EPSILON
+            ]
 
             item_name = str(
                 row["ItemName"]
@@ -930,8 +991,39 @@ def expand_jobs(forecast_df, growth):
                 or "anmum" in normalize_key(item_name)
             )
 
-            for _ in range(new_lot_count):
+            # Jika stok valid tidak cukup, buat lot baru
+            # dengan ukuran tetap tepat 1 ton.
+            while demand_remaining > LOT_ROUNDING_EPSILON:
                 lot_number += 1
+
+                virtual_usable_until = (
+                    due_date
+                    + pd.DateOffset(
+                        months=usable_age_months
+                    )
+                ).normalize()
+
+                new_virtual_lot = {
+                    "lot_number": lot_number,
+                    "remaining": FIXED_LOT_TON,
+                    "usable_until": virtual_usable_until,
+                }
+
+                used_from_new_lot = min(
+                    demand_remaining,
+                    new_virtual_lot["remaining"],
+                )
+
+                demand_remaining -= used_from_new_lot
+                new_virtual_lot["remaining"] -= used_from_new_lot
+
+                if (
+                    new_virtual_lot["remaining"]
+                    > LOT_ROUNDING_EPSILON
+                ):
+                    virtual_inventory.append(
+                        new_virtual_lot
+                    )
 
                 jobs.append({
                     "Lot ID": (
@@ -956,7 +1048,7 @@ def expand_jobs(forecast_df, growth):
                         cumulative_demand_ton
                     ),
                     "Required Cumulative Lots": (
-                        required_cumulative_lots
+                        lot_number
                     ),
 
                     "Batch Ton": FIXED_LOT_TON,
@@ -1000,11 +1092,22 @@ def expand_jobs(forecast_df, growth):
                     ),
                     "Month Due Date": row.get(
                         "MonthDueDate",
-                        "",
+                        due_date.strftime(
+                            "%Y-%m-%d"
+                        ),
                     ),
                     "Month Due Day": row.get(
                         "MonthDueDay",
                         np.nan,
+                    ),
+
+                    "Virtual Usable Until": (
+                        virtual_usable_until.strftime(
+                            "%Y-%m-%d"
+                        )
+                    ),
+                    "Lot Creation Reason": (
+                        "Valid inventory insufficient"
                     ),
 
                     "Mini Blend Minute": (
@@ -1014,8 +1117,11 @@ def expand_jobs(forecast_df, growth):
                     ),
                 })
 
-            cumulative_lot_count = (
-                required_cumulative_lots
+            virtual_inventory.sort(
+                key=lambda lot: (
+                    lot["usable_until"],
+                    lot["lot_number"],
+                )
             )
 
     jobs_df = pd.DataFrame(jobs)
@@ -1041,7 +1147,7 @@ def expand_jobs(forecast_df, growth):
             True,
         ],
         kind="stable",
-    ).reset_index(drop=True)  
+    ).reset_index(drop=True)   
 
 
 def calc_setup(line_state, job):
