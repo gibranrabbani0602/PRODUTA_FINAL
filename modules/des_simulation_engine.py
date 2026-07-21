@@ -26,6 +26,9 @@ T_MINI_BLEND_ANMUM = 6
 SETUP_PORT_BERUBAH = 40
 SETUP_PORT_SAMA = 60
 
+FIXED_LOT_TON = 1.0
+LOT_ROUNDING_EPSILON = 1e-9
+
 DEFAULT_MAX_SCENARIOS = 100
 DEFAULT_CANDIDATE_WINDOW = 60
 DEFAULT_PLANNED_PREVIEW_ROWS = 5000
@@ -693,29 +696,196 @@ def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_
         })
     return pd.DataFrame(rows)
 
-
 def expand_jobs(forecast_df, growth):
+    """
+    Membentuk lot produksi tetap 1 ton secara kumulatif
+    untuk setiap SKU.
+
+    Pertumbuhan diterapkan pada demand, bukan pada
+    ukuran lot. Setiap lot produksi tetap 1 ton.
+    """
     jobs = []
-    for _, row in forecast_df.iterrows():
-        qty = int(max(row["Qty"], 1))
-        forecast_ton = float(row["ForecastTon"]) * (1 + growth)
-        batch_ton = forecast_ton / qty
-        for _ in range(qty):
-            item_name = str(row["ItemName"])
-            is_anmum = "anm" in normalize_key(item_name) or "anmum" in normalize_key(item_name)
-            jobs.append({
-                "Item Name": row["ItemName"], "SKU": row["SkuId"], "Forecast Ton": forecast_ton,
-                "SKU Gram": float(row["SkuGr"]), "Speed BG": float(row["Speed"]), "Speed D": float(row["SpeedD"]),
-                "Chocolate Type": row["IsChocolate"], "Color Setup": row["ColorForSetup"], "Port Type": row["port_type"],
-                "Allergen": float(row["Allergen"]), "Shelf Life": float(row["ShelfLife"]), "Month Index": float(row["MonthIndex"]),
-                "Month Input Raw": row.get("MonthInputRaw", ""), "Month Input Mode": row.get("MonthInputMode", "sequence"),
-                "Month Due Date": row.get("MonthDueDate", ""), "Month Due Day": row.get("MonthDueDay", np.nan),
-                "Batch Ton": batch_ton, "Mini Blend Minute": T_MINI_BLEND_ANMUM if is_anmum else T_MINI_BLEND_NON_ANMUM,
-            })
+
+    working_df = forecast_df.copy()
+
+    working_df["Growth Demand Ton"] = (
+        working_df["ForecastTon"].astype(float)
+        * (1 + float(growth))
+    )
+
+    working_df = working_df.sort_values(
+        by=[
+            "SkuId",
+            "Date",
+            "MonthIndex",
+        ],
+        ascending=[
+            True,
+            True,
+            True,
+        ],
+        kind="stable",
+    ).reset_index(drop=True)
+
+    grouped_skus = working_df.groupby(
+        "SkuId",
+        sort=True,
+    )
+
+    for sku_id, sku_df in grouped_skus:
+        cumulative_demand_ton = 0.0
+        cumulative_lot_count = 0
+        lot_number = 0
+
+        sku_df = sku_df.sort_values(
+            by=[
+                "Date",
+                "MonthIndex",
+            ],
+            ascending=[
+                True,
+                True,
+            ],
+            kind="stable",
+        )
+
+        for _, row in sku_df.iterrows():
+            monthly_demand_ton = max(
+                float(row["Growth Demand Ton"]),
+                0.0,
+            )
+
+            cumulative_demand_ton += monthly_demand_ton
+
+            required_cumulative_lots = int(
+                np.ceil(
+                    (
+                        cumulative_demand_ton
+                        - LOT_ROUNDING_EPSILON
+                    )
+                    / FIXED_LOT_TON
+                )
+            )
+
+            new_lot_count = max(
+                required_cumulative_lots
+                - cumulative_lot_count,
+                0,
+            )
+
+            item_name = str(
+                row["ItemName"]
+            )
+
+            is_anmum = (
+                "anm" in normalize_key(item_name)
+                or "anmum" in normalize_key(item_name)
+            )
+
+            for _ in range(new_lot_count):
+                lot_number += 1
+
+                jobs.append({
+                    "Lot ID": (
+                        f"{sku_id}-L{lot_number:04d}"
+                    ),
+                    "Lot Number": lot_number,
+
+                    "Item Name": row["ItemName"],
+                    "SKU": row["SkuId"],
+
+                    "Forecast Ton": monthly_demand_ton,
+                    "Demand Month Ton": monthly_demand_ton,
+                    "Cumulative Demand Ton": (
+                        cumulative_demand_ton
+                    ),
+                    "Required Cumulative Lots": (
+                        required_cumulative_lots
+                    ),
+
+                    "Batch Ton": FIXED_LOT_TON,
+
+                    "SKU Gram": float(
+                        row["SkuGr"]
+                    ),
+                    "Speed BG": float(
+                        row["Speed"]
+                    ),
+                    "Speed D": float(
+                        row["SpeedD"]
+                    ),
+
+                    "Chocolate Type": (
+                        row["IsChocolate"]
+                    ),
+                    "Color Setup": (
+                        row["ColorForSetup"]
+                    ),
+                    "Port Type": (
+                        row["port_type"]
+                    ),
+                    "Allergen": float(
+                        row["Allergen"]
+                    ),
+                    "Shelf Life": float(
+                        row["ShelfLife"]
+                    ),
+
+                    "Month Index": float(
+                        row["MonthIndex"]
+                    ),
+                    "Month Input Raw": row.get(
+                        "MonthInputRaw",
+                        "",
+                    ),
+                    "Month Input Mode": row.get(
+                        "MonthInputMode",
+                        "calendar_date",
+                    ),
+                    "Month Due Date": row.get(
+                        "MonthDueDate",
+                        "",
+                    ),
+                    "Month Due Day": row.get(
+                        "MonthDueDay",
+                        np.nan,
+                    ),
+
+                    "Mini Blend Minute": (
+                        T_MINI_BLEND_ANMUM
+                        if is_anmum
+                        else T_MINI_BLEND_NON_ANMUM
+                    ),
+                })
+
+            cumulative_lot_count = (
+                required_cumulative_lots
+            )
+
     jobs_df = pd.DataFrame(jobs)
-    if len(jobs_df) == 0:
+
+    if jobs_df.empty:
         return jobs_df
-    return jobs_df.sort_values(by=["Month Index", "SKU", "Allergen", "Color Setup", "Port Type"], ascending=[True, True, True, True, True]).reset_index(drop=True)
+
+    return jobs_df.sort_values(
+        by=[
+            "Month Index",
+            "SKU",
+            "Lot Number",
+            "Allergen",
+            "Color Setup",
+            "Port Type",
+        ],
+        ascending=[
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+        ],
+        kind="stable",
+    ).reset_index(drop=True)  
 
 
 def calc_setup(line_state, job):
