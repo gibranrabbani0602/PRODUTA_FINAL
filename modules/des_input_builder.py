@@ -17,6 +17,7 @@ REQUIRED_OUTPUT_COLUMNS = [
     "Allergen",
     "ShelfLife",
     "MonthIndex",
+    "DataRole",
 ]
 
 
@@ -232,6 +233,7 @@ def build_forecast_input_des(forecast_df, master_df, adjustment_pct=0.0, qty_def
     fc = standardize_forecast(forecast_df)
     ms = standardize_master(master_df)
     fc = fc.copy()
+    fc["DataRole"] = "evaluation"
     fc["ForecastTon"] = fc["ForecastTon"] * (1 + float(adjustment_pct) / 100)
     merged = fc.merge(ms, on="SkuId", how="left", suffixes=("_forecast", ""))
     missing = merged[merged["ItemName"].isna()]["SkuId"].drop_duplicates().astype(str).tolist()
