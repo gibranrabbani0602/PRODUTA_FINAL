@@ -467,9 +467,31 @@ def render():
         )
     
     with data_tabs[2]:
+        alias_options = sorted(
+            planned_jobs_df["SKU Alias"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+    
+        selected_alias = st.selectbox(
+            "Filter SKU Alias",
+            options=["Semua SKU"] + alias_options,
+        )
+    
+        filtered_plan = planned_jobs_df.copy()
+    
+        if selected_alias != "Semua SKU":
+            filtered_plan = filtered_plan[
+                filtered_plan["SKU Alias"].eq(
+                    selected_alias
+                )
+            ]
+    
         st.dataframe(
             _disp(
-                planned_jobs_df,
+                filtered_plan,
                 DEFAULT_PLANNED_PREVIEW_ROWS,
             ),
             width="stretch",
