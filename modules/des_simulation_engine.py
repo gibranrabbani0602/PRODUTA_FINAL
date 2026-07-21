@@ -600,7 +600,7 @@ def clean_prepared_input(df):
 
     due_dates = (
         df["Date"]
-        - pd.Timedelta(days=1)
+        + pd.offsets.MonthEnd(0)
     ).dt.normalize()
 
     df["MonthDueDate"] = (
