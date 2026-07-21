@@ -2370,6 +2370,22 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     late_demand_ton,
                     2,
                 ),
+                "On-Time Demand Fulfillment (%)": round(
+                    on_time_fulfillment_pct,
+                    2,
+                ),
+                "Late Demand Ton": round(
+                    late_demand_ton,
+                    2,
+                ),
+                "On-Time Unmet Demand Ton": round(
+                    late_demand_ton,
+                    2,
+                ),
+                "Ending Backlog Ton": round(
+                    ending_backlog_ton,
+                    2,
+                ),
                 "Ending Backlog Ton": round(
                     ending_backlog_ton,
                     2,
