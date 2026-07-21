@@ -2,7 +2,6 @@
 Decision Support System — PT FBMI Lactalis, TIN IPB 2026
 """
 import streamlit as st
-import streamlit.components.v1 as _stc
 from pathlib import Path
 import base64
 from modules.session import init_session, get_state, set_state, clear_session_data
@@ -56,8 +55,12 @@ def _auto_login():
 
 # ── LOGIN PAGE ──────────────────────────────────────────────────────────────
 def auth_page():
-    _stc.html("<script>document.title='Decision Support System — Masuk'</script>", height=0)
-
+    st.html(
+        "<script>"
+        "document.title='Decision Support System — Masuk';"
+        "</script>",
+        unsafe_allow_javascript=True,
+    )
     logo_b64 = ""
     for p in [LOGO_SQUARE, LOGO]:
         if Path(p).exists():
@@ -232,7 +235,12 @@ with st.sidebar:
         unsafe_allow_html=True)
     page = st.radio("", MENUS, label_visibility="collapsed", key="main_nav")
 
-_stc.html(f"<script>document.title='Decision Support System — {page}'</script>", height=0)
+st.html(
+    f"<script>"
+    f"document.title='Decision Support System — {page}';"
+    f"</script>",
+    unsafe_allow_javascript=True,
+)
 
 _, _tr = st.columns([7, 1])
 with _tr:
