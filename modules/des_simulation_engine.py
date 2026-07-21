@@ -365,15 +365,31 @@ def clean_prepared_input(df):
     )
 
     df["MonthInputMode"] = "calendar_date"
+    
+    df["DemandMonth"] = (
+        df["Date"]
+        .dt.strftime("%Y-%m")
+    )
+
+    due_dates = (
+        df["Date"]
+        - pd.Timedelta(days=1)
+    ).dt.normalize()
 
     df["MonthDueDate"] = (
-        df["Date"]
+        due_dates
         .dt.strftime("%Y-%m-%d")
     )
 
     df["MonthDueDay"] = (
-        (df["Date"] - simulation_start).dt.days + 1
+        (
+            due_dates
+            - simulation_start
+        ).dt.days
+        + 1
     ).astype(int)
+
+   
 
     # --------------------------------------------------
     # MEMBERSIHKAN KOLOM NUMERIK
