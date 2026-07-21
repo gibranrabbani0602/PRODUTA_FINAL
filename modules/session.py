@@ -27,6 +27,7 @@ DEFAULTS = {
     "_vol_bytes":        b"",
     "_vol_name":         "",
     "ml4":               [],
+    "stock_backlog": pd.DataFrame(),
 }
 
 def init_session():
@@ -36,7 +37,13 @@ def init_session():
 
 
 # ── Keys yang di-persist ke disk (survive server restart dalam sesi yang sama)
-_DISK_PERSIST_SIM = {"simulation_result", "scenario_config", "planned_jobs", "input_data"}
+_DISK_PERSIST_SIM = {
+    "simulation_result",
+    "scenario_config",
+    "planned_jobs",
+    "input_data",
+    "stock_backlog",
+}
 _NO_DISK_CACHE    = {"simulation", "export_bytes"}
 
 
@@ -129,6 +136,7 @@ def clear_capacity_results():
         "input_data",
         "export_bytes",
         "simulation",
+        "stock_backlog",
     ]
 
     for key in keys_to_clear:
