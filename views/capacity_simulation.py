@@ -284,7 +284,7 @@ def render():
             key="des_d_hours",
         )
     
-    evaluation_schedule_mode = "legacy"
+    evaluation_schedule_mode = None
     evaluation_weekly_hours = None
     
     st.info(
