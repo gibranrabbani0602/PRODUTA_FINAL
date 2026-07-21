@@ -804,56 +804,92 @@ def make_growth_options(mode="checklist", checklist=None, gmin=0, gmax=10, step=
     return checklist or [0]
 
 
-def generate_scenarios(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_percent_options, max_scenarios=DEFAULT_MAX_SCENARIOS, b_downtime=0, g_downtime=0, d_downtime=0):
-    growth_options = [g / 100 for g in growth_percent_options]
-    combos_iter = itertools.product(b_days_options, b_hours_options, g_days_options, g_hours_options, d_days_options, d_hours_options, batch_options, growth_options)
+def generate_scenarios(
+    b_days_options,
+    b_hours_options,
+    g_days_options,
+    g_hours_options,
+    d_days_options,
+    d_hours_options,
+    batch_options,
+    growth_percent_options,
+    max_scenarios=DEFAULT_MAX_SCENARIOS,
+    b_downtime=0,
+    g_downtime=0,
+    d_downtime=0,
+):
+    growth_options = [
+        g / 100
+        for g in growth_percent_options
+    ]
+
+    combos_iter = itertools.product(
+        b_days_options,
+        b_hours_options,
+        g_days_options,
+        g_hours_options,
+        d_days_options,
+        d_hours_options,
+        batch_options,
+        growth_options,
+    )
+
     rows = []
+
     for idx, combo in enumerate(combos_iter):
         if idx >= int(max_scenarios):
             break
-    (
-        b_days,
-        b_hours,
-        g_days,
-        g_hours,
-        d_days,
-        d_hours,
-        batch_limit_input,
-        growth,
-    ) = combo
-    
-    batch_limit_input = int(batch_limit_input)
-    
-    batch_label = (
-        "BLOSS"
-        if batch_limit_input == 0
-        else f"B{batch_limit_input}"
-    )
-    
-    batch_limit = (
-        999999
-        if batch_limit_input == 0
-        else batch_limit_input
-    )
-    
-    scenario_code = (
-        f"B{b_days}D-{b_hours}H | "
-        f"G{g_days}D-{g_hours}H | "
-        f"D{d_days}D-{d_hours}H | "
-        f"{batch_label} | "
-        f"G{int(growth * 100)}%"
-    )
+
+        (
+            b_days,
+            b_hours,
+            g_days,
+            g_hours,
+            d_days,
+            d_hours,
+            batch_limit_input,
+            growth,
+        ) = combo
+
+        batch_limit_input = int(batch_limit_input)
+
+        batch_label = (
+            "BLOSS"
+            if batch_limit_input == 0
+            else f"B{batch_limit_input}"
+        )
+
+        batch_limit = (
+            999999
+            if batch_limit_input == 0
+            else batch_limit_input
+        )
+
+        scenario_code = (
+            f"B{b_days}D-{b_hours}H | "
+            f"G{g_days}D-{g_hours}H | "
+            f"D{d_days}D-{d_hours}H | "
+            f"{batch_label} | "
+            f"G{int(growth * 100)}%"
+        )
+
         rows.append({
             "Scenario": scenario_code,
-            "Line B Days": int(b_days), "Line B Hours": float(b_hours),
-            "Line G Days": int(g_days), "Line G Hours": float(g_hours),
-            "Line D Days": int(d_days), "Line D Hours": float(d_hours),
+            "Line B Days": int(b_days),
+            "Line B Hours": float(b_hours),
+            "Line G Days": int(g_days),
+            "Line G Hours": float(g_hours),
+            "Line D Days": int(d_days),
+            "Line D Hours": float(d_hours),
             "Batch Mode": batch_label,
             "Batch Limit Input": batch_limit_input,
             "Batch Limit per Day": int(batch_limit),
             "Growth": float(growth),
-            "Line B Downtime Days/Month": int(b_downtime), "Line G Downtime Days/Month": int(g_downtime), "Line D Downtime Days/Month": int(d_downtime),
+            "Line B Downtime Days/Month": int(b_downtime),
+            "Line G Downtime Days/Month": int(g_downtime),
+            "Line D Downtime Days/Month": int(d_downtime),
         })
+
     return pd.DataFrame(rows)
 
 def expand_jobs(forecast_df, growth):
