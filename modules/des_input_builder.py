@@ -242,7 +242,126 @@ def standardize_forecast(forecast_df):
     df = df.merge(months, on="Date", how="left")
     return df
 
+def standardize_history(history_df):
+    """
+    Menstandarkan data kebutuhan aktual historis.
 
+    Format yang dapat dibaca antara lain:
+    ds | sku | description | y
+    """
+    alias = {
+        "SkuId": [
+            "sku",
+            "sku id",
+            "sku_id",
+            "kode sku",
+            "item code",
+            "material",
+        ],
+        "Date": [
+            "date",
+            "ds",
+            "tanggal",
+            "bulan",
+            "period",
+            "periode",
+        ],
+        "ActualTon": [
+            "y",
+            "actual",
+            "actual ton",
+            "volume",
+            "volume ton",
+            "demand actual",
+            "demand aktual",
+            "ton",
+            "tonase",
+        ],
+        "DescriptionHistory": [
+            "description",
+            "deskripsi",
+            "itemname",
+            "item name",
+            "product",
+        ],
+    }
+
+    df = _rename_alias(
+        history_df,
+        alias,
+    )
+
+    required = [
+        "SkuId",
+        "Date",
+        "ActualTon",
+    ]
+
+    missing = [
+        column
+        for column in required
+        if column not in df.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            "Kolom data historis belum lengkap: "
+            + str(missing)
+            + ". Kolom tersedia: "
+            + str(list(history_df.columns))
+        )
+
+    df["SkuId"] = (
+        df["SkuId"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df["Date"] = pd.to_datetime(
+        df["Date"],
+        errors="coerce",
+    )
+
+    df["Date"] = (
+        df["Date"]
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+
+    df["ActualTon"] = (
+        pd.to_numeric(
+            df["ActualTon"],
+            errors="coerce",
+        )
+        .fillna(0)
+        .clip(lower=0)
+    )
+
+    df = df.dropna(
+        subset=["Date"]
+    )
+
+    df = df[
+        df["SkuId"].str.len() > 0
+    ]
+
+    df = (
+        df.groupby(
+            [
+                "SkuId",
+                "Date",
+            ],
+            as_index=False,
+        )["ActualTon"]
+        .sum()
+    )
+
+    if df.empty:
+        raise ValueError(
+            "Data historis kosong setelah dibersihkan."
+        )
+
+    return df
 def standardize_master(master_df):
     alias = {
         "ItemName": ["item name", "nama produk", "nama sku", "description", "deskripsi", "product"],
@@ -297,3 +416,230 @@ def build_forecast_input_des(forecast_df, master_df, adjustment_pct=0.0, qty_def
         if extra in merged.columns:
             result[extra] = merged[extra]
     return result.sort_values(["MonthIndex", "SkuId"]).reset_index(drop=True)
+ 
+def build_combined_des_input(
+    forecast_df,
+    master_df,
+    history_df,
+    initialization_months=12,
+    adjustment_pct=0.0,
+    qty_default=1,
+):
+    """
+    Menggabungkan:
+    - kebutuhan aktual historis sebagai initialization;
+    - hasil forecast sebagai evaluation.
+
+    Growth atau adjustment hanya dikenakan pada evaluation.
+    """
+    if history_df is None:
+        raise ValueError(
+            "Data historis diperlukan untuk membentuk "
+            "periode initialization."
+        )
+
+    initialization_months = int(
+        initialization_months
+    )
+
+    if initialization_months <= 0:
+        raise ValueError(
+            "Jumlah bulan initialization harus lebih dari 0."
+        )
+
+    forecast = standardize_forecast(
+        forecast_df
+    )
+
+    master = standardize_master(
+        master_df
+    )
+
+    history = standardize_history(
+        history_df
+    )
+
+    evaluation_start = (
+        forecast["Date"]
+        .min()
+        .to_period("M")
+        .to_timestamp()
+    )
+
+    initialization_start = (
+        evaluation_start
+        - pd.DateOffset(
+            months=initialization_months
+        )
+    )
+
+    initialization_end = (
+        evaluation_start
+        - pd.DateOffset(months=1)
+    )
+
+    evaluation_skus = sorted(
+        forecast["SkuId"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    initialization_dates = pd.date_range(
+        start=initialization_start,
+        end=initialization_end,
+        freq="MS",
+    )
+
+    initialization_grid = (
+        pd.MultiIndex.from_product(
+            [
+                evaluation_skus,
+                initialization_dates,
+            ],
+            names=[
+                "SkuId",
+                "Date",
+            ],
+        )
+        .to_frame(index=False)
+    )
+
+    history = history[
+        history["SkuId"].isin(
+            evaluation_skus
+        )
+    ].copy()
+
+    history = history[
+        history["Date"].between(
+            initialization_start,
+            initialization_end,
+            inclusive="both",
+        )
+    ].copy()
+
+    initialization = (
+        initialization_grid
+        .merge(
+            history,
+            on=[
+                "SkuId",
+                "Date",
+            ],
+            how="left",
+        )
+    )
+
+    initialization["ForecastTon"] = (
+        initialization["ActualTon"]
+        .fillna(0)
+        .astype(float)
+    )
+
+    initialization["DataRole"] = (
+        "initialization"
+    )
+
+    evaluation = forecast.copy()
+
+    evaluation["ForecastTon"] = (
+        evaluation["ForecastTon"]
+        * (
+            1
+            + float(adjustment_pct)
+            / 100
+        )
+    )
+
+    evaluation["DataRole"] = (
+        "evaluation"
+    )
+
+    combined = pd.concat(
+        [
+            initialization[
+                [
+                    "SkuId",
+                    "Date",
+                    "ForecastTon",
+                    "DataRole",
+                ]
+            ],
+            evaluation[
+                [
+                    "SkuId",
+                    "Date",
+                    "ForecastTon",
+                    "DataRole",
+                ]
+            ],
+        ],
+        ignore_index=True,
+    )
+
+    month_reference = (
+        combined[
+            ["Date"]
+        ]
+        .drop_duplicates()
+        .sort_values(
+            "Date"
+        )
+        .reset_index(drop=True)
+    )
+
+    month_reference["MonthIndex"] = (
+        month_reference.index
+        + 1
+    )
+
+    combined = combined.merge(
+        month_reference,
+        on="Date",
+        how="left",
+    )
+
+    merged = combined.merge(
+        master,
+        on="SkuId",
+        how="left",
+    )
+
+    missing_master = (
+        merged[
+            merged["ItemName"].isna()
+        ]["SkuId"]
+        .drop_duplicates()
+        .astype(str)
+        .tolist()
+    )
+
+    if missing_master:
+        raise ValueError(
+            "SKU berikut belum tersedia pada "
+            "Master Data Asil: "
+            + ", ".join(
+                missing_master[:30]
+            )
+        )
+
+    merged["Qty"] = int(
+        qty_default
+    )
+
+    result = merged[
+        REQUIRED_OUTPUT_COLUMNS
+    ].copy()
+
+    return (
+        result.sort_values(
+            [
+                "Date",
+                "SkuId",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
