@@ -370,7 +370,12 @@ def render():
                 f'<div style="font-size:.72rem;color:#8b949e;margin-top:4px;">Dasar keputusan: {alasan}</div>'
                 f'</div>')
 
-    def _util_chart(util_by_lid, limits, title="UTILISASI PER LINI"):
+    def _util_chart(
+        util_by_lid,
+        limits,
+        title="UTILISASI PER LINI",
+        chart_key=None,
+    ):
         """Bar chart utilisasi — garis batas digambar per-bar sesuai batas lini masing-masing."""
         st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
         fig = go.Figure()
@@ -395,9 +400,17 @@ def render():
             margin=dict(l=0,r=0,t=20,b=16), showlegend=False, height=240,
             yaxis=dict(range=[0,110], title="Utilisasi (%)", gridcolor="#EBF4F6"),
             xaxis=dict(title=""), bargap=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key=chart_key,
+        )
 
-    def _tons_chart(tons_by_lid, title="TONASE PER LINI"):
+    def _tons_chart(
+        tons_by_lid,
+        title="TONASE PER LINI",
+        chart_key=None,
+    ):
         st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
         fig = go.Figure()
         _colors = ["#071952","#088395","#37B7C3","#d29922","#3fb950","#8b949e"]
@@ -408,7 +421,11 @@ def render():
         fig.update_layout(template="plotly_white", paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
             margin=dict(l=0,r=0,t=20,b=16), showlegend=False, height=240,
             yaxis=dict(title="Tonase (ton)", gridcolor="#EBF4F6"), bargap=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key=chart_key,
+        )
 
     # ── TABS ────────────────────────────────────────────────────────────────
     tab_eval, tab_diag = st.tabs(["Evaluasi Skenario", "Diagnosa & Rekomendasi"])
@@ -505,8 +522,18 @@ def render():
         ), unsafe_allow_html=True)
 
         _mc1, _mc2 = st.columns(2)
-        with _mc1: _util_chart(_sm_util, _util_limits)
-        with _mc2: _tons_chart(_sm_tons)
+        with _mc1:
+            _util_chart(
+                _sm_util,
+                _util_limits,
+                chart_key="cp_eval_util_chart",
+            )
+        
+        with _mc2:
+            _tons_chart(
+                _sm_tons,
+                chart_key="cp_eval_tons_chart",
+            )
 
         if str(_sm.get("Keputusan","MAINTAIN")) == "MODIFY":
             st.info("Skenario ini perlu evaluasi lebih lanjut. "
@@ -550,8 +577,18 @@ def render():
                 f"Skenario ini memenuhi seluruh kriteria operasional — "
                 f"tidak ada kebutuhan kapasitas tambahan pada kondisi ini.")
             _c1, _c2 = st.columns(2)
-            with _c1: _util_chart(_t2_util, _util_limits)
-            with _c2: _tons_chart(_t2_tons)
+            with _c1:
+                _util_chart(
+                    _t2_util,
+                    _util_limits,
+                    chart_key="cp_diag_util_chart",
+                )
+            
+            with _c2:
+                _tons_chart(
+                    _t2_tons,
+                    chart_key="cp_diag_tons_chart",
+                )
 
         else:
             # ── A. DIAGNOSA BOTTLENECK ────────────────────────────────────
