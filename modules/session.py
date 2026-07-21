@@ -118,10 +118,34 @@ def set_(key, val):
 # Cache management
 # ──────────────────────────────────────────────────────────────────────────────
 def clear_capacity_results():
-    """Clear hanya data kapasitas/simulasi dari session."""
-    for k in ["simulation_result", "scenario_config", "planned_jobs",
-              "input_data", "export_bytes", "simulation"]:
-        st.session_state[k] = DEFAULTS.get(k, pd.DataFrame())
+    """
+    Membersihkan seluruh hasil simulasi kapasitas
+    dari memori dan cache disk.
+    """
+    keys_to_clear = [
+        "simulation_result",
+        "scenario_config",
+        "planned_jobs",
+        "input_data",
+        "export_bytes",
+        "simulation",
+    ]
+
+    for key in keys_to_clear:
+        st.session_state[key] = DEFAULTS.get(
+            key,
+            pd.DataFrame(),
+        )
+
+    for key in _DISK_PERSIST_SIM:
+        cache_file = (
+            CACHE_DIR
+            / f"{key}.pkl"
+        )
+
+        cache_file.unlink(
+            missing_ok=True
+        )
 
 def clear_session_data():
     """
