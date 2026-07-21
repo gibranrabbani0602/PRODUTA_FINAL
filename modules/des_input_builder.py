@@ -63,14 +63,53 @@ def _format_gram_token(value):
         .replace(".", "p")
     )
 
-
-def _ensure_sku_alias(df):
+def _package_token(value):
     """
-    Memastikan setiap SKU mempunyai satu alias.
+    Mengubah jenis kemasan menjadi kode pendek anonim.
+    """
+    key = _norm(value)
 
-    Alias dari master dipertahankan.
-    Jika kosong, aplikasi membuat alias umum:
-    SKU-001-1000
+    if "stick" in key:
+        return "STK"
+
+    if "sss" in key or "sachet" in key:
+        return "SSS"
+
+    if "bib" in key or "baginbox" in key:
+        return "BIB"
+
+    return "SKU"
+
+
+def ensure_sku_alias(df):
+
+def _package_token(value):
+    """
+    Mengubah jenis kemasan menjadi kode pendek anonim.
+    """
+    key = _norm(value)
+
+    if "stick" in key:
+        return "STK"
+
+    if "sss" in key or "sachet" in key:
+        return "SSS"
+
+    if "bib" in key or "baginbox" in key:
+        return "BIB"
+
+    return "SKU"
+
+
+def ensure_sku_alias(df):
+    """
+    Memastikan setiap SKU mempunyai satu alias tetap.
+
+    Contoh:
+    BIB-01-1000
+    SSS-02-25
+
+    Alias yang sudah tersedia pada master tetap dipertahankan.
     """
     df = df.copy()
 
@@ -84,37 +123,69 @@ def _ensure_sku_alias(df):
         .str.strip()
     )
 
+    if "port_type" not in df.columns:
+        df["port_type"] = ""
+
     sku_reference = (
         df[
             [
                 "SkuId",
                 "SkuGr",
+                "port_type",
             ]
         ]
         .drop_duplicates(
             subset=["SkuId"],
             keep="first",
         )
+        .copy()
+    )
+
+    sku_reference["PackageToken"] = (
+        sku_reference["port_type"]
+        .apply(_package_token)
+    )
+
+    sku_reference = (
+        sku_reference
         .sort_values(
-            by=["SkuId"],
+            by=[
+                "PackageToken",
+                "SkuId",
+            ],
             kind="stable",
         )
         .reset_index(drop=True)
     )
 
+    sku_reference["AliasSequence"] = (
+        sku_reference
+        .groupby("PackageToken")
+        .cumcount()
+        + 1
+    )
+
     generated_alias = {}
 
-    for sequence, row in sku_reference.iterrows():
+    for _, row in sku_reference.iterrows():
         sku_id = str(
             row["SkuId"]
         ).strip()
+
+        package_token = str(
+            row["PackageToken"]
+        )
 
         gram_token = _format_gram_token(
             row["SkuGr"]
         )
 
+        sequence = int(
+            row["AliasSequence"]
+        )
+
         generated_alias[sku_id] = (
-            f"SKU-{sequence + 1:03d}-{gram_token}"
+            f"{package_token}-{sequence:02d}-{gram_token}"
         )
 
     missing_alias = (
@@ -140,13 +211,13 @@ def _ensure_sku_alias(df):
         .map(generated_alias)
     )
 
-    duplicate_aliases = (
+    alias_check = (
         df.groupby("SKU_Alias")["SkuId"]
         .nunique()
     )
 
-    duplicate_aliases = duplicate_aliases[
-        duplicate_aliases > 1
+    duplicate_aliases = alias_check[
+        alias_check > 1
     ]
 
     if not duplicate_aliases.empty:
@@ -224,7 +295,7 @@ def standardize_master(master_df):
         .reset_index(drop=True)
     )
 
-    df = _ensure_sku_alias(df)
+    df = ensure_sku_alias(df)
 
     return df
 
