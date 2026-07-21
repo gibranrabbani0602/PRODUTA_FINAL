@@ -11,6 +11,9 @@ import pandas as pd
 from modules.des_input_builder import (
     ensure_sku_alias,
 )
+from modules.inventory_backlog import (
+    build_inventory_backlog_table,
+)
 # ======================================================
 # DES CAPACITY ENGINE - preserved from Gradio logic
 # + tambahan optional tolerance per line.
@@ -1734,7 +1737,155 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     planned_jobs_df = pd.DataFrame(
         planned_jobs
     )
-
+        stock_backlog_df = (
+            build_inventory_backlog_table(
+                forecast_df=forecast_df,
+                planned_jobs_df=planned_jobs_df,
+                scenario_code=scenario_code,
+                growth=growth,
+            )
+        )
+    
+        if stock_backlog_df.empty:
+            demand_fulfilled_ton = 0.0
+            demand_fulfillment_pct = 0.0
+            on_time_fulfilled_ton = 0.0
+            on_time_fulfillment_pct = 0.0
+            late_demand_ton = 0.0
+            ending_backlog_ton = 0.0
+            ending_inventory_ton = 0.0
+            expired_inventory_ton = 0.0
+            sku_period_on_time_pct = 0.0
+            late_sku_periods = 0
+            maximum_delay_days = 0
+        else:
+            evaluation_ledger = (
+                stock_backlog_df[
+                    stock_backlog_df["Data Role"]
+                    .astype(str)
+                    .str.lower()
+                    .eq("evaluation")
+                ]
+                .copy()
+            )
+    
+            evaluation_demand_ton = (
+                evaluation_ledger["Demand Ton"]
+                .sum()
+            )
+    
+            demand_fulfilled_ton = (
+                evaluation_ledger[
+                    "Total Fulfilled Ton"
+                ]
+                .sum()
+            )
+    
+            on_time_fulfilled_ton = (
+                evaluation_ledger[
+                    "On-Time Fulfilled Ton"
+                ]
+                .sum()
+            )
+    
+            late_demand_ton = (
+                evaluation_ledger[
+                    "Late Demand Ton"
+                ]
+                .sum()
+            )
+    
+            ending_backlog_ton = (
+                evaluation_ledger[
+                    "Final Backlog Ton"
+                ]
+                .sum()
+            )
+    
+            demand_fulfillment_pct = (
+                demand_fulfilled_ton
+                / evaluation_demand_ton
+                * 100
+                if evaluation_demand_ton > 0
+                else 0.0
+            )
+    
+            on_time_fulfillment_pct = (
+                on_time_fulfilled_ton
+                / evaluation_demand_ton
+                * 100
+                if evaluation_demand_ton > 0
+                else 0.0
+            )
+    
+            late_sku_periods = int(
+                (
+                    evaluation_ledger[
+                        "Late Demand Ton"
+                    ]
+                    > LOT_ROUNDING_EPSILON
+                )
+                .sum()
+            )
+    
+            sku_period_on_time_pct = (
+                (
+                    len(evaluation_ledger)
+                    - late_sku_periods
+                )
+                / len(evaluation_ledger)
+                * 100
+                if len(evaluation_ledger) > 0
+                else 0.0
+            )
+    
+            maximum_delay_days = int(
+                pd.to_numeric(
+                    evaluation_ledger[
+                        "Delay Days"
+                    ],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .max()
+            )
+    
+            latest_sku_rows = (
+                stock_backlog_df
+                .sort_values(
+                    by=[
+                        "SKU",
+                        "Due Date",
+                    ],
+                    kind="stable",
+                )
+                .groupby(
+                    "SKU",
+                    sort=False,
+                )
+                .tail(1)
+            )
+    
+            ending_inventory_ton = (
+                latest_sku_rows[
+                    "Inventory After Due Ton"
+                ]
+                .sum()
+            )
+    
+            expired_inventory_ton = (
+                latest_sku_rows[
+                    "Expired Inventory Until Due Ton"
+                ]
+                .sum()
+            )
+    
+        all_demand_on_time = (
+            late_demand_ton
+            <= LOT_ROUNDING_EPSILON
+            and ending_backlog_ton
+            <= LOT_ROUNDING_EPSILON
+        )
     if planned_jobs_df.empty:
         initialization_production = 0.0
         evaluation_production = 0.0
@@ -1837,6 +1988,53 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             target_demand,
             2,
         ),
+                "Demand Fulfilled Ton": round(
+                    demand_fulfilled_ton,
+                    2,
+                ),
+                "Demand Fulfillment (%)": round(
+                    demand_fulfillment_pct,
+                    2,
+                ),
+                "On-Time Fulfilled Ton": round(
+                    on_time_fulfilled_ton,
+                    2,
+                ),
+                "On-Time Demand Fulfillment (%)": round(
+                    on_time_fulfillment_pct,
+                    2,
+                ),
+                "Late Demand Ton": round(
+                    late_demand_ton,
+                    2,
+                ),
+                "Ending Backlog Ton": round(
+                    ending_backlog_ton,
+                    2,
+                ),
+                "Ending Inventory Ton": round(
+                    ending_inventory_ton,
+                    2,
+                ),
+                "Expired Inventory Ton": round(
+                    expired_inventory_ton,
+                    2,
+                ),
+                "SKU-Period On Time (%)": round(
+                    sku_period_on_time_pct,
+                    2,
+                ),
+                "Late SKU-Periods": int(
+                    late_sku_periods
+                ),
+                "Maximum Delay Days": int(
+                    maximum_delay_days
+                ),
+                "On-Time Status": (
+                    "Seluruh Demand Tepat Waktu"
+                    if all_demand_on_time
+                    else "Terdapat Demand Terlambat"
+                ),
         "Initialization Production Ton": round(
             initialization_production,
             2,
@@ -1975,16 +2173,41 @@ def run_des_simulation(
             all_planned.append(planned)
 
     result_df = pd.DataFrame(results)
-    if not result_df.empty:
-        # Ranking konsisten dengan Evaluasi Kapasitas (modules/scenario_ranking.py):
-        # produksi desc → unmet asc → efisiensi utilisasi → risiko.
-        from modules.scenario_ranking import scenario_sort_tuple
-        result_df["_sort"] = result_df.apply(lambda r: scenario_sort_tuple(
-            r.get("Tons Finished", 0), r.get("Unmet Demand Ton", 0),
-            r.get("Util Filling B (%)", 0), r.get("Util Filling G (%)", 0),
-            r.get("Util Filling D (%)", 0),
-        ), axis=1)
-        result_df = result_df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
+        if not result_df.empty:
+        result_df[
+            "Highest Utilization (%)"
+        ] = result_df[
+            [
+                "Util Filling B (%)",
+                "Util Filling G (%)",
+                "Util Filling D (%)",
+            ]
+        ].max(axis=1)
+
+        result_df = (
+            result_df.sort_values(
+                by=[
+                    "On-Time Demand Fulfillment (%)",
+                    "SKU-Period On Time (%)",
+                    "Ending Backlog Ton",
+                    "Late Demand Ton",
+                    "Maximum Delay Days",
+                    "Highest Utilization (%)",
+                    "Scenario",
+                ],
+                ascending=[
+                    False,
+                    False,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                ],
+                kind="stable",
+            )
+            .reset_index(drop=True)
+        )
 
     planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
     sku_count = (
