@@ -8,7 +8,9 @@ from io import BytesIO, StringIO
 
 import numpy as np
 import pandas as pd
-
+from modules.des_input_builder import (
+    ensure_sku_alias,
+)
 # ======================================================
 # DES CAPACITY ENGINE - preserved from Gradio logic
 # + tambahan optional tolerance per line.
@@ -500,6 +502,8 @@ def clean_prepared_input(df):
         .astype(str)
         .str.strip()
     )
+
+    df = ensure_sku_alias(df)
 
     if "Color" in df.columns:
         df["ColorForSetup"] = (
