@@ -2559,6 +2559,9 @@ def run_des_simulation(
     g_downtime=0,
     d_downtime=0,
     holiday_mode="none",
+    evaluation_schedule_mode="management",
+    evaluation_weekly_hours=None,
+    # Backward-compat: availability diterima tetapi diabaikan
     # Backward-compat: availability diterima tetapi diabaikan
     b_availability=100,
     g_availability=100,
@@ -2589,6 +2592,57 @@ def run_des_simulation(
         b_downtime=b_downtime,
         g_downtime=g_downtime,
         d_downtime=d_downtime,
+    )
+    schedule_mode = str(
+        evaluation_schedule_mode or "management"
+    ).strip().lower()
+    
+    valid_schedule_modes = {
+        "actual",
+        "management",
+        "custom",
+    }
+    
+    if schedule_mode not in valid_schedule_modes:
+        raise ValueError(
+            "Mode jadwal evaluation harus actual, "
+            "management, atau custom."
+        )
+    
+    scenario_df["Evaluation Schedule Mode"] = (
+        schedule_mode
+    )
+    
+    if schedule_mode == "custom":
+        validated_weekly_hours = (
+            validate_weekly_hours(
+                evaluation_weekly_hours or {}
+            )
+        )
+    
+        scenario_df["Evaluation Weekly Hours"] = [
+            validated_weekly_hours.copy()
+            for _ in range(len(scenario_df))
+        ]
+    else:
+        scenario_df["Evaluation Weekly Hours"] = [
+            None
+            for _ in range(len(scenario_df))
+        ]
+    
+    schedule_label = {
+        "actual": "KONDISI AKTUAL",
+        "management": "USULAN MANAJEMEN",
+        "custom": "JADWAL KHUSUS",
+    }[schedule_mode]
+    
+    scenario_df["Scenario"] = scenario_df.apply(
+        lambda row: (
+            f"{schedule_label} | "
+            f"{row['Batch Mode']} | "
+            f"G{int(float(row['Growth']) * 100)}%"
+        ),
+        axis=1,
     )
 
     evaluation_start_date = (
