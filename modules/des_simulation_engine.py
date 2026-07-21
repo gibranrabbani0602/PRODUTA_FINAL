@@ -28,6 +28,13 @@ T_MINI_BLEND_ANMUM = 6
 SETUP_PORT_BERUBAH = 40
 SETUP_PORT_SAMA = 60
 
+MIN_REMAINING_SHELF_MONTHS = 3
+
+SETUP_RESERVE_PER_LOT_MINUTE = max(
+    SETUP_PORT_BERUBAH,
+    SETUP_PORT_SAMA,
+)
+
 FIXED_LOT_TON = 1.0
 LOT_ROUNDING_EPSILON = 1e-9
 
@@ -230,34 +237,55 @@ def parse_period_date_value(value):
 
 def build_simulation_calendar(forecast_df):
     """
-    Membentuk kalender simulasi dari periode yang ada pada input.
+    Membentuk kalender simulasi.
 
-    Awal simulasi:
-    tanggal periode paling awal.
-
-    Akhir simulasi:
-    hari terakhir pada bulan periode terakhir.
+    Kalender dimulai dari awal bulan tempat due date
+    pertama berada. Dengan demikian kebutuhan bulan
+    pertama tetap mempunyai waktu untuk diproduksi
+    sebelum tanggal jatuh temponya.
     """
     if "Date" not in forecast_df.columns:
         raise ValueError(
-            "Kolom Date belum tersedia sehingga kalender simulasi "
-            "tidak dapat dibentuk."
+            "Kolom Date belum tersedia sehingga kalender "
+            "simulasi tidak dapat dibentuk."
         )
 
     if forecast_df["Date"].isna().any():
         raise ValueError(
-            "Sebagian tanggal periode kosong atau tidak dapat dibaca."
+            "Sebagian tanggal periode kosong atau "
+            "tidak dapat dibaca."
         )
 
-    simulation_start = pd.Timestamp(
-        forecast_df["Date"].min()
-    ).normalize()
+    due_dates = pd.Series(dtype="datetime64[ns]")
+
+    if "MonthDueDate" in forecast_df.columns:
+        due_dates = (
+            pd.to_datetime(
+                forecast_df["MonthDueDate"],
+                errors="coerce",
+            )
+            .dropna()
+        )
+
+    if not due_dates.empty:
+        simulation_start = (
+            due_dates.min()
+            .to_period("M")
+            .to_timestamp()
+        )
+    else:
+        simulation_start = pd.Timestamp(
+            forecast_df["Date"].min()
+        ).normalize()
 
     last_period = pd.Timestamp(
         forecast_df["Date"].max()
     ).normalize()
 
-    simulation_end = last_period + pd.offsets.MonthEnd(1)
+    simulation_end = (
+        last_period
+        + pd.offsets.MonthEnd(1)
+    )
 
     calendar_dates = pd.date_range(
         start=simulation_start,
@@ -265,7 +293,11 @@ def build_simulation_calendar(forecast_df):
         freq="D",
     )
 
-    return simulation_start, simulation_end, calendar_dates
+    return (
+        simulation_start,
+        simulation_end,
+        calendar_dates,
+    )
 
 
 
@@ -399,9 +431,16 @@ def clean_prepared_input(df):
     )
 
     df["MonthDueDay"] = (
+    calendar_reference_start = (
+        due_dates.min()
+        .to_period("M")
+        .to_timestamp()
+    )
+    
+    df["MonthDueDay"] = (
         (
             due_dates
-            - simulation_start
+            - calendar_reference_start
         ).dt.days
         + 1
     ).astype(int)
@@ -1025,6 +1064,313 @@ def get_line_calendar(scenario, line):
         return int(scenario["Line G Days"]), float(scenario["Line G Hours"]), 1.0, int(scenario.get("Line G Downtime Days/Month", 0))
     return int(scenario["Line D Days"]), float(scenario["Line D Hours"]), 1.0, int(scenario.get("Line D Downtime Days/Month", 0))
 
+def assign_capacity_release_dates(
+    jobs_df,
+    calendar_dates,
+    working_days_by_line,
+    line_calendar,
+):
+    """
+    Menentukan kapan suatu kelompok lot mulai boleh
+    masuk antrean produksi.
+
+    Tanggal dihitung mundur dari due date berdasarkan:
+    1. estimasi kebutuhan menit filling dan setup;
+    2. kalender kerja masing-masing lini;
+    3. kompatibilitas SKU terhadap lini;
+    4. batas minimum sisa shelf life tiga bulan.
+    """
+    jobs = jobs_df.copy()
+
+    if jobs.empty:
+        return jobs
+
+    jobs["Due Date"] = pd.to_datetime(
+        jobs["Month Due Date"],
+        errors="coerce",
+    ).dt.normalize()
+
+    if jobs["Due Date"].isna().any():
+        raise ValueError(
+            "Sebagian Month Due Date tidak dapat dibaca."
+        )
+
+    calendar_index = pd.DatetimeIndex(
+        calendar_dates
+    ).normalize()
+
+    calendar_start = pd.Timestamp(
+        calendar_index.min()
+    ).normalize()
+
+    estimated_minutes = []
+    compatibility = []
+
+    for _, job in jobs.iterrows():
+        possible_fill_minutes = []
+
+        speed_bg = float(
+            job["Speed BG"]
+        )
+
+        speed_d = float(
+            job["Speed D"]
+        )
+
+        sku_gram = float(
+            job["SKU Gram"]
+        )
+
+        batch_ton = float(
+            job["Batch Ton"]
+        )
+
+        can_bg = (
+            speed_bg > 0
+            and sku_gram > 0
+        )
+
+        can_d = (
+            speed_d > 0
+            and sku_gram > 0
+        )
+
+        if can_bg:
+            fill_bg = (
+                batch_ton
+                * 1_000_000
+                / sku_gram
+                / speed_bg
+            )
+
+            possible_fill_minutes.append(
+                fill_bg
+            )
+
+        if can_d:
+            fill_d = (
+                batch_ton
+                * 1_000_000
+                / sku_gram
+                / speed_d
+            )
+
+            possible_fill_minutes.append(
+                fill_d
+            )
+
+        if not possible_fill_minutes:
+            raise ValueError(
+                "SKU tidak mempunyai kecepatan yang "
+                "valid pada Line B/G maupun Line D: "
+                + str(job["SKU"])
+            )
+
+        estimated_minutes.append(
+            min(possible_fill_minutes)
+            + SETUP_RESERVE_PER_LOT_MINUTE
+        )
+
+        if can_bg and can_d:
+            compatibility.append("FLEXIBLE")
+        elif can_bg:
+            compatibility.append("BG_ONLY")
+        else:
+            compatibility.append("D_ONLY")
+
+    jobs["Estimated Work Minute"] = (
+        estimated_minutes
+    )
+
+    jobs["Line Compatibility"] = (
+        compatibility
+    )
+
+    jobs["Capacity Release Date"] = pd.NaT
+    jobs["Earliest Shelf Date"] = pd.NaT
+    jobs["Release Date"] = pd.NaT
+    jobs["Release Capacity Warning"] = False
+
+    for due_date, due_group in jobs.groupby(
+        "Due Date",
+        sort=True,
+    ):
+        bg_only_work = (
+            due_group.loc[
+                due_group[
+                    "Line Compatibility"
+                ].eq("BG_ONLY"),
+                "Estimated Work Minute",
+            ]
+            .sum()
+        )
+
+        d_only_work = (
+            due_group.loc[
+                due_group[
+                    "Line Compatibility"
+                ].eq("D_ONLY"),
+                "Estimated Work Minute",
+            ]
+            .sum()
+        )
+
+        total_work = (
+            due_group[
+                "Estimated Work Minute"
+            ]
+            .sum()
+        )
+
+        available_bg = 0.0
+        available_d = 0.0
+
+        capacity_release_date = (
+            calendar_start
+        )
+
+        enough_capacity = False
+
+        dates_before_due = calendar_index[
+            calendar_index
+            <= pd.Timestamp(due_date)
+        ]
+
+        for work_date in reversed(
+            dates_before_due
+        ):
+            work_date = pd.Timestamp(
+                work_date
+            ).normalize()
+
+            if (
+                work_date
+                in working_days_by_line["B"]
+            ):
+                available_bg += (
+                    line_calendar["B"][
+                        "cap_mins"
+                    ]
+                )
+
+            if (
+                work_date
+                in working_days_by_line["G"]
+            ):
+                available_bg += (
+                    line_calendar["G"][
+                        "cap_mins"
+                    ]
+                )
+
+            if (
+                work_date
+                in working_days_by_line["D"]
+            ):
+                available_d += (
+                    line_calendar["D"][
+                        "cap_mins"
+                    ]
+                )
+
+            total_available = (
+                available_bg
+                + available_d
+            )
+
+            dedicated_capacity_ok = (
+                available_bg
+                >= bg_only_work
+                and available_d
+                >= d_only_work
+            )
+
+            total_capacity_ok = (
+                total_available
+                >= total_work
+            )
+
+            if (
+                dedicated_capacity_ok
+                and total_capacity_ok
+            ):
+                capacity_release_date = (
+                    work_date
+                )
+
+                enough_capacity = True
+                break
+
+        for job_index in due_group.index:
+            shelf_life_months = int(
+                np.floor(
+                    max(
+                        float(
+                            jobs.at[
+                                job_index,
+                                "Shelf Life",
+                            ]
+                        ),
+                        0,
+                    )
+                )
+            )
+
+            usable_age_months = max(
+                shelf_life_months
+                - MIN_REMAINING_SHELF_MONTHS,
+                0,
+            )
+
+            earliest_shelf_date = (
+                pd.Timestamp(due_date)
+                - pd.DateOffset(
+                    months=usable_age_months
+                )
+            ).normalize()
+
+            final_release_date = max(
+                pd.Timestamp(
+                    capacity_release_date
+                ),
+                pd.Timestamp(
+                    earliest_shelf_date
+                ),
+                calendar_start,
+            )
+
+            jobs.at[
+                job_index,
+                "Capacity Release Date",
+            ] = capacity_release_date
+
+            jobs.at[
+                job_index,
+                "Earliest Shelf Date",
+            ] = earliest_shelf_date
+
+            jobs.at[
+                job_index,
+                "Release Date",
+            ] = final_release_date
+
+            jobs.at[
+                job_index,
+                "Release Capacity Warning",
+            ] = not enough_capacity
+
+    return (
+        jobs.sort_values(
+            by=[
+                "Release Date",
+                "Due Date",
+                "SKU",
+                "Lot Number",
+            ],
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
 
 def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_window=DEFAULT_CANDIDATE_WINDOW):
     scenario_code = scenario["Scenario"]
@@ -1059,7 +1405,6 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     jobs_df = expand_jobs(forecast_df, growth)
     if len(jobs_df) == 0:
         return {}, pd.DataFrame()
-    unscheduled = jobs_df.to_dict("records")
     downtime_sets = {
         "B": make_monthly_downtime_set(
             scenario.get(
@@ -1106,6 +1451,20 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         for _ln in ["B", "G", "D"]
     }
 
+    jobs_df = assign_capacity_release_dates(
+        jobs_df=jobs_df,
+        calendar_dates=calendar_dates,
+        working_days_by_line=_wd,
+        line_calendar=_lc,
+    )
+
+    pending_jobs = jobs_df.to_dict(
+        "records"
+    )
+
+    ready_jobs = []
+    pending_position = 0
+
     line_state = {line: {"used_today": 0, "processing": 0, "setup": 0, "tons": 0,
                          "last_sku": None, "last_port": None, "last_allergen": 0, "last_color": None}
                   for line in ["B", "G", "D"]}
@@ -1129,18 +1488,57 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         for line in active_lines:
             line_state[line]["used_today"] = 0
 
+        new_jobs_added = False
+
+        while (
+            pending_position
+            < len(pending_jobs)
+            and pd.Timestamp(
+                pending_jobs[
+                    pending_position
+                ]["Release Date"]
+            ).normalize()
+            <= calendar_date
+        ):
+            ready_jobs.append(
+                pending_jobs[
+                    pending_position
+                ]
+            )
+
+            pending_position += 1
+            new_jobs_added = True
+
+        if new_jobs_added:
+            ready_jobs.sort(
+                key=lambda job: (
+                    pd.Timestamp(
+                        job["Due Date"]
+                    ),
+                    str(job["SKU"]),
+                    int(job["Lot Number"]),
+                )
+            )
+
         # OPTIMIZATION: skip hari tidak aktif; break jika semua demand terjadwal
         if not active_lines:
             continue
-        if not unscheduled:
+        if (
+            not ready_jobs
+            and pending_position
+            >= len(pending_jobs)
+        ):
             break
 
+        if not ready_jobs:
+            continue
+
         count_batch_today = 0
-        while unscheduled:
+        while ready_jobs:
             if batch_mode == "B35" and count_batch_today >= batch_limit_per_day:
                 break
             best_idx = best_line = best_finish = best_setup = best_tfill = best_speed = None
-            for idx, job in enumerate(unscheduled[:candidate_window]):
+            for idx, job in enumerate(ready_jobs[:candidate_window]):
                 candidates = []
                 for line in active_lines:   # OPTIMIZATION: hanya cek lini yang aktif hari ini
                     cap_mins = _lc[line]["cap_mins"]
@@ -1157,7 +1555,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     break
             if best_idx is None:
                 break
-            job = unscheduled.pop(best_idx)
+            job = ready_jobs.pop(best_idx)
             tblend = T_BLEND_COKLAT if str(job["Chocolate Type"]).lower() == "coklat" else T_BLEND_NON_COKLAT
             line_state[best_line]["used_today"] = best_finish
             line_state[best_line]["processing"] += best_tfill
@@ -1189,6 +1587,37 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 "Speed": best_speed, "Port Type": job["Port Type"], "Allergen": job["Allergen"], "Color Setup": job["Color Setup"],
                 "Shelf Life": job["Shelf Life"], "Month Index": job["Month Index"], "Month Input Raw": job.get("Month Input Raw", ""),
                 "Month Input Mode": job.get("Month Input Mode", "sequence"), "Month Due Date": job.get("Month Due Date", ""), "Month Due Day": job.get("Month Due Day", np.nan),
+                "Release Date": (
+                    pd.Timestamp(
+                        job["Release Date"]
+                    )
+                    .strftime("%Y-%m-%d")
+                ),
+
+                "Due Date": (
+                    pd.Timestamp(
+                        job["Due Date"]
+                    )
+                    .strftime("%Y-%m-%d")
+                ),
+
+                "Capacity Release Date": (
+                    pd.Timestamp(
+                        job[
+                            "Capacity Release Date"
+                        ]
+                    )
+                    .strftime("%Y-%m-%d")
+                ),
+
+                "Earliest Shelf Date": (
+                    pd.Timestamp(
+                        job[
+                            "Earliest Shelf Date"
+                        ]
+                    )
+                    .strftime("%Y-%m-%d")
+                ),
             })
             seq += 1
             count_batch_today += 1
