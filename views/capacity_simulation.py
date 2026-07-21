@@ -13,6 +13,9 @@ from modules.des_simulation_engine import (
     make_growth_options,
     DEFAULT_PLANNED_PREVIEW_ROWS,
 )
+from modules.inventory_backlog import (
+    build_inventory_backlog_table,
+)
 
 BLUE_SEQ = ["#004B83", "#22B8E8", "#7DD3FC", "#55C3E8"]
 
@@ -315,11 +318,39 @@ def render():
                     max_scenarios=int(max_scenarios),
                     b_downtime=b_down, g_downtime=g_down, d_downtime=d_down,
                 )
+                
+                if result_df.empty:
+                    raise ValueError(
+                        "Simulasi tidak menghasilkan skenario."
+                    )
+
+                best_result_row = result_df.iloc[0]
+
+                stock_backlog_df = (
+                    build_inventory_backlog_table(
+                        forecast_df=input_df,
+                        planned_jobs_df=planned_jobs_df,
+                        scenario_code=best_result_row[
+                            "Scenario"
+                        ],
+                        growth=float(
+                            best_result_row.get(
+                                "Growth",
+                                0.0,
+                            )
+                        ),
+                    )
+                )
+                
                 excel_bytes, excel_name = export_to_excel_bytes(result_df, scenario_df, planned_jobs_df, input_df, "Simulasi DES Capacity")
             set_state("simulation_result", result_df)
             set_state("scenario_config", scenario_df)
             set_state("planned_jobs", planned_jobs_df)
             set_state("input_data", input_df)
+            set_state(
+                "stock_backlog",
+                stock_backlog_df,
+            )
             set_state("export_bytes", {"bytes": excel_bytes, "name": excel_name})
             st.success("DES simulation selesai.")
         except Exception as e:
@@ -330,6 +361,9 @@ def render():
     scenario_df = get_state("scenario_config")
     planned_jobs_df = get_state("planned_jobs")
     input_df = get_state("input_data")
+    stock_backlog_df = get_state(
+        "stock_backlog"
+    )
     export_payload = get_state("export_bytes")
 
     st.markdown("<div class='section-title'>Simulation Output</div>", unsafe_allow_html=True)
@@ -407,23 +441,97 @@ def render():
         summary_meta,
     )
     
-    data_tabs = st.tabs(["Simulation Result", "Scenario Configuration", "Production Plan", "Input", "Charts", "Export Result"])
+    data_tabs = st.tabs(
+        [
+            "Simulation Result",
+            "Scenario Configuration",
+            "Production Plan",
+            "Stock & Backlog",
+            "Input",
+            "Charts",
+            "Export Result",
+        ]
+    )
     with data_tabs[0]:
-        st.dataframe(_disp(result_df), use_container_width=True, hide_index=True)
+        st.dataframe(
+            _disp(result_df),
+            width="stretch",
+            hide_index=True,
+        )
+    
     with data_tabs[1]:
-        st.dataframe(_disp(scenario_df), use_container_width=True, hide_index=True)
+        st.dataframe(
+            _disp(scenario_df),
+            width="stretch",
+            hide_index=True,
+        )
+    
     with data_tabs[2]:
-        st.dataframe(_disp(planned_jobs_df, DEFAULT_PLANNED_PREVIEW_ROWS), use_container_width=True, hide_index=True)
-        st.caption(f"Preview dibatasi {DEFAULT_PLANNED_PREVIEW_ROWS:,} baris. Export Excel untuk data lengkap.")
+        st.dataframe(
+            _disp(
+                planned_jobs_df,
+                DEFAULT_PLANNED_PREVIEW_ROWS,
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+    
     with data_tabs[3]:
-        st.dataframe(_disp(input_df, 2000), use_container_width=True, hide_index=True)
-    with data_tabs[4]:
-        _plot_outputs(result_df)
-    with data_tabs[5]:
-        if export_payload:
-            st.download_button("Download Excel Result", data=export_payload["bytes"], file_name=export_payload["name"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if (
+            stock_backlog_df is None
+            or stock_backlog_df.empty
+        ):
+            st.info(
+                "Tabel stok dan backlog belum tersedia."
+            )
         else:
-            st.info("Export belum tersedia. Run simulation terlebih dahulu.")
+            evaluation_stock = (
+                stock_backlog_df[
+                    stock_backlog_df[
+                        "Data Role"
+                    ].eq("evaluation")
+                ]
+                .copy()
+            )
+    
+            st.caption(
+                "Tampilan periode evaluasi. "
+                "Periode initialization tetap digunakan "
+                "untuk membentuk stok awal."
+            )
+    
+            st.dataframe(
+                _disp(evaluation_stock, 5000),
+                width="stretch",
+                hide_index=True,
+            )
+    
+    with data_tabs[4]:
+        st.dataframe(
+            _disp(input_df, 2000),
+            width="stretch",
+            hide_index=True,
+        )
+    
+    with data_tabs[5]:
+        _plot_outputs(result_df)
+    
+    with data_tabs[6]:
+        if export_payload:
+            st.download_button(
+                "Download Excel Result",
+                data=export_payload["bytes"],
+                file_name=export_payload["name"],
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
+            )
+        else:
+            st.info(
+                "Export belum tersedia. "
+                "Run simulation terlebih dahulu."
+            )   
     best_result = result_df.iloc[0]
     
     holiday_mode_used = str(
