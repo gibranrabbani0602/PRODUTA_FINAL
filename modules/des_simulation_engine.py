@@ -430,7 +430,6 @@ def clean_prepared_input(df):
         .dt.strftime("%Y-%m-%d")
     )
 
-    df["MonthDueDay"] = (
     calendar_reference_start = (
         due_dates.min()
         .to_period("M")
