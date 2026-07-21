@@ -37,7 +37,18 @@ def _summary_cards(result_df, meta):
 
     best = result_df.iloc[0]
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    highest_utilization = float(
+        best.get(
+            "Highest Utilization (%)",
+            max(
+                best["Util Filling B (%)"],
+                best["Util Filling G (%)"],
+                best["Util Filling D (%)"],
+            ),
+        )
+    )
+
+    c1, c2, c3 = st.columns(3)
 
     c1.metric(
         "Best Scenario",
@@ -45,25 +56,33 @@ def _summary_cards(result_df, meta):
     )
 
     c2.metric(
-        "Tons Finished",
-        f"{best['Tons Finished']:,.2f}",
+        "On-Time Demand Fulfillment",
+        f"{best['On-Time Demand Fulfillment (%)']:,.2f}%",
     )
 
     c3.metric(
-        "Unmet Demand",
-        f"{best['Unmet Demand Ton']:,.2f}",
+        "Late Demand",
+        f"{best['Late Demand Ton']:,.2f} ton",
     )
 
+    c4, c5, c6 = st.columns(3)
+
     c4.metric(
-        "Finished Ratio",
-        f"{best['Finished Ratio (%)']:,.2f}%",
+        "Ending Backlog",
+        f"{best['Ending Backlog Ton']:,.2f} ton",
     )
 
     c5.metric(
-        "Highest Utilization",
-        best["Bottleneck Area"],
+        "Ending Inventory",
+        f"{best['Ending Inventory Ton']:,.2f} ton",
     )
 
+    c6.metric(
+        "Highest Utilization",
+        str(best["Bottleneck Area"]),
+        f"{highest_utilization:,.2f}%",
+    )    
+    
     holiday_value = best.get(
         "Holiday Days",
         meta.get("holiday_days", 0),
