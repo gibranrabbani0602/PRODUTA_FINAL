@@ -287,6 +287,8 @@ def render():
             st.rerun()
 
     if run:
+        clear_capacity_results()
+    
         try:
             if forecast_input is None or forecast_input.empty:
                 st.error("ForecastInput DES belum tersedia.")
@@ -334,6 +336,29 @@ def render():
     if result_df is None or result_df.empty:
         warning("Belum ada hasil simulation. Jalankan <b>Run DES Simulation</b> setelah input tersedia.")
         return
+        required_result_columns = {
+            "Scenario",
+            "Tons Finished",
+            "Unmet Demand Ton",
+            "Finished Ratio (%)",
+            "Bottleneck Area",
+        }
+    
+        missing_result_columns = (
+            required_result_columns
+            - set(result_df.columns)
+        )
+    
+        if missing_result_columns:
+            clear_capacity_results()
+    
+            warning(
+                "Struktur hasil lama tidak cocok dengan "
+                "versi model terbaru. Jalankan ulang "
+                "<b>Run DES Simulation</b>."
+            )
+    
+            return
 
     if (
         input_df is not None
