@@ -45,6 +45,76 @@ DEFAULT_MAX_SCENARIOS = 100
 DEFAULT_CANDIDATE_WINDOW = 60
 DEFAULT_PLANNED_PREVIEW_ROWS = 5000
 
+WEEKDAY_LABELS = [
+    "Senin",
+    "Selasa",
+    "Rabu",
+    "Kamis",
+    "Jumat",
+    "Sabtu",
+    "Minggu",
+]
+
+
+# Kondisi operasi aktual yang digunakan untuk initialization.
+# Urutan: Senin sampai Minggu.
+INITIALIZATION_WEEKLY_HOURS = {
+    "B": [16, 24, 24, 24, 24, 16, 16],
+    "G": [16, 16, 16, 16, 16, 16, 16],
+    "D": [16, 24, 24, 24, 24, 16, 16],
+}
+
+
+# Kondisi aktual bila ingin diuji kembali
+# pada periode evaluation.
+ACTUAL_WEEKLY_HOURS = {
+    "B": [16, 24, 24, 24, 24, 16, 16],
+    "G": [16, 16, 16, 16, 16, 16, 16],
+    "D": [16, 24, 24, 24, 24, 16, 16],
+}
+
+
+# Usulan pola operasi manajemen.
+# B dan G: Senin-Sabtu 16 jam, Minggu libur.
+# D: setiap hari 24 jam.
+MANAGEMENT_WEEKLY_HOURS = {
+    "B": [16, 16, 16, 16, 16, 16, 0],
+    "G": [16, 16, 16, 16, 16, 16, 0],
+    "D": [24, 24, 24, 24, 24, 24, 24],
+}
+
+
+def validate_weekly_hours(profile):
+    cleaned = {}
+
+    for line in ["B", "G", "D"]:
+        values = profile.get(line, [])
+
+        if len(values) != 7:
+            raise ValueError(
+                f"Jadwal Line {line} harus berisi "
+                "7 nilai, dari Senin sampai Minggu."
+            )
+
+        cleaned[line] = [
+            min(max(float(value), 0.0), 24.0)
+            for value in values
+        ]
+
+    return cleaned
+
+
+def get_daily_line_hours(profile, line, calendar_date):
+    profile = validate_weekly_hours(profile)
+
+    weekday_index = pd.Timestamp(
+        calendar_date
+    ).weekday()
+
+    return float(
+        profile[line][weekday_index]
+    )
+
 REQUIRED_CONCEPTS = [
     "ItemName", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
     "IsChocolate", "port_type", "Allergen", "ShelfLife",
