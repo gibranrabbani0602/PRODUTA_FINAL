@@ -115,6 +115,111 @@ def get_daily_line_hours(profile, line, calendar_date):
         profile[line][weekday_index]
     )
 
+
+def weekly_hours_from_days_and_hours(
+    days_per_week,
+    hours_per_day,
+):
+    days = min(max(int(days_per_week), 0), 7)
+    hours = min(max(float(hours_per_day), 0.0), 24.0)
+
+    return [
+        hours if weekday_index < days else 0.0
+        for weekday_index in range(7)
+    ]
+
+
+def get_evaluation_weekly_hours(scenario):
+    """
+    Mengambil pola jam kerja untuk periode evaluation.
+
+    Untuk sementara, jika UI belum mengirim nama preset,
+    pola dibentuk dari pilihan hari/minggu dan jam/hari
+    yang sudah tersedia. Ini menjaga kompatibilitas
+    dengan tampilan lama.
+    """
+    mode = str(
+        scenario.get(
+            "Evaluation Schedule Mode",
+            "legacy",
+        )
+    ).strip().lower()
+
+    if mode == "actual":
+        return validate_weekly_hours(
+            ACTUAL_WEEKLY_HOURS
+        )
+
+    if mode == "management":
+        return validate_weekly_hours(
+            MANAGEMENT_WEEKLY_HOURS
+        )
+
+    if mode == "custom":
+        custom_profile = scenario.get(
+            "Evaluation Weekly Hours",
+            None,
+        )
+
+        if isinstance(custom_profile, dict):
+            return validate_weekly_hours(
+                custom_profile
+            )
+
+    return validate_weekly_hours({
+        "B": weekly_hours_from_days_and_hours(
+            scenario["Line B Days"],
+            scenario["Line B Hours"],
+        ),
+        "G": weekly_hours_from_days_and_hours(
+            scenario["Line G Days"],
+            scenario["Line G Hours"],
+        ),
+        "D": weekly_hours_from_days_and_hours(
+            scenario["Line D Days"],
+            scenario["Line D Hours"],
+        ),
+    })
+
+
+def get_evaluation_calendar_start(forecast_df):
+    """
+    Periode evaluation dimulai pada awal bulan tempat
+    due date pertama evaluation berada.
+
+    Contoh:
+    demand April 2026 jatuh tempo 31 Maret 2026,
+    sehingga kalender evaluation dimulai 1 Maret 2026.
+    """
+    evaluation_rows = forecast_df[
+        forecast_df["DataRole"]
+        .astype(str)
+        .str.lower()
+        .eq("evaluation")
+    ].copy()
+
+    if evaluation_rows.empty:
+        raise ValueError(
+            "Periode evaluation belum tersedia."
+        )
+
+    due_dates = pd.to_datetime(
+        evaluation_rows["MonthDueDate"],
+        errors="coerce",
+    ).dropna()
+
+    if due_dates.empty:
+        raise ValueError(
+            "Due date periode evaluation tidak dapat dibaca."
+        )
+
+    return (
+        due_dates.min()
+        .to_period("M")
+        .to_timestamp()
+        .normalize()
+    )
+
 REQUIRED_CONCEPTS = [
     "ItemName", "SkuId", "ForecastTon", "SkuGr", "SpeedD", "Speed",
     "IsChocolate", "port_type", "Allergen", "ShelfLife",
@@ -1319,7 +1424,8 @@ def assign_capacity_release_dates(
     jobs_df,
     calendar_dates,
     working_days_by_line,
-    line_calendar,
+    daily_capacity_minutes,
+    evaluation_start_date,
 ):
     """
     Menentukan kapan suatu kelompok lot mulai boleh
@@ -1327,9 +1433,10 @@ def assign_capacity_release_dates(
 
     Tanggal dihitung mundur dari due date berdasarkan:
     1. estimasi kebutuhan menit filling dan setup;
-    2. kalender kerja masing-masing lini;
+    2. kalender kerja harian masing-masing lini;
     3. kompatibilitas SKU terhadap lini;
-    4. batas minimum sisa shelf life tiga bulan.
+    4. batas minimum sisa shelf life tiga bulan;
+    5. batas awal periode initialization/evaluation.
     """
     jobs = jobs_df.copy()
 
@@ -1352,6 +1459,10 @@ def assign_capacity_release_dates(
 
     calendar_start = pd.Timestamp(
         calendar_index.min()
+    ).normalize()
+
+    evaluation_start_date = pd.Timestamp(
+        evaluation_start_date
     ).normalize()
 
     estimated_minutes = []
@@ -1473,18 +1584,38 @@ def assign_capacity_release_dates(
             .sum()
         )
 
+        group_roles = (
+            due_group["Data Role"]
+            .fillna("evaluation")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        group_start_date = (
+            evaluation_start_date
+            if group_roles.eq("evaluation").all()
+            else calendar_start
+        )
+
         available_bg = 0.0
         available_d = 0.0
 
         capacity_release_date = (
-            calendar_start
+            group_start_date
         )
 
         enough_capacity = False
 
         dates_before_due = calendar_index[
-            calendar_index
-            <= pd.Timestamp(due_date)
+            (
+                calendar_index
+                >= group_start_date
+            )
+            & (
+                calendar_index
+                <= pd.Timestamp(due_date)
+            )
         ]
 
         for work_date in reversed(
@@ -1498,30 +1629,33 @@ def assign_capacity_release_dates(
                 work_date
                 in working_days_by_line["B"]
             ):
-                available_bg += (
-                    line_calendar["B"][
-                        "cap_mins"
-                    ]
+                available_bg += float(
+                    daily_capacity_minutes["B"].get(
+                        work_date,
+                        0.0,
+                    )
                 )
 
             if (
                 work_date
                 in working_days_by_line["G"]
             ):
-                available_bg += (
-                    line_calendar["G"][
-                        "cap_mins"
-                    ]
+                available_bg += float(
+                    daily_capacity_minutes["G"].get(
+                        work_date,
+                        0.0,
+                    )
                 )
 
             if (
                 work_date
                 in working_days_by_line["D"]
             ):
-                available_d += (
-                    line_calendar["D"][
-                        "cap_mins"
-                    ]
+                available_d += float(
+                    daily_capacity_minutes["D"].get(
+                        work_date,
+                        0.0,
+                    )
                 )
 
             total_available = (
@@ -1580,6 +1714,19 @@ def assign_capacity_release_dates(
                 )
             ).normalize()
 
+            data_role = str(
+                jobs.at[
+                    job_index,
+                    "Data Role",
+                ]
+            ).strip().lower()
+
+            role_start_date = (
+                evaluation_start_date
+                if data_role == "evaluation"
+                else calendar_start
+            )
+
             final_release_date = max(
                 pd.Timestamp(
                     capacity_release_date
@@ -1587,7 +1734,9 @@ def assign_capacity_release_dates(
                 pd.Timestamp(
                     earliest_shelf_date
                 ),
-                calendar_start,
+                pd.Timestamp(
+                    role_start_date
+                ),
             )
 
             jobs.at[
@@ -1623,6 +1772,7 @@ def assign_capacity_release_dates(
         .reset_index(drop=True)
     )
 
+
 def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_window=DEFAULT_CANDIDATE_WINDOW):
     scenario_code = scenario["Scenario"]
     batch_mode = scenario["Batch Mode"]
@@ -1632,6 +1782,13 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     simulation_start, simulation_end, calendar_dates = (
         build_simulation_calendar(forecast_df)
     )
+
+    evaluation_start_date = (
+        get_evaluation_calendar_start(
+            forecast_df
+        )
+    )
+
     evaluation_mask = (
         forecast_df["DataRole"]
         .astype(str)
@@ -1656,57 +1813,110 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     jobs_df = expand_jobs(forecast_df, growth)
     if len(jobs_df) == 0:
         return {}, pd.DataFrame()
-    downtime_sets = {
-        "B": make_monthly_downtime_set(
-            scenario.get(
-                "Line B Downtime Days/Month",
-                0,
-            ),
-            calendar_dates,
-        ),
-        "G": make_monthly_downtime_set(
-            scenario.get(
-                "Line G Downtime Days/Month",
-                0,
-            ),
-            calendar_dates,
-        ),
-        "D": make_monthly_downtime_set(
-            scenario.get(
-                "Line D Downtime Days/Month",
-                0,
-            ),
-            calendar_dates,
-        ),
-    }
+    initialization_profile = (
+        validate_weekly_hours(
+            INITIALIZATION_WEEKLY_HOURS
+        )
+    )
 
-    # ── OPTIMIZATION: Precompute once per scenario ─────────────────────────────
-    # 1. Line calendar (days, hours, cap_mins) — tidak berubah dalam scenario
-    _lc = {}
-    for _ln in ["B", "G", "D"]:
-        _days, _hrs, _avail, _ = get_line_calendar(scenario, _ln)
-        _lc[_ln] = {"days": _days, "hours": _hrs, "cap_mins": _hrs * 60.0}
+    evaluation_profile = (
+        get_evaluation_weekly_hours(
+            scenario
+        )
+    )
 
-    # 2. Working days set per line — O(1) lookup di inner loop
-    _wd = {
-        _ln: frozenset(
-            pd.Timestamp(calendar_date).normalize()
-            for calendar_date in calendar_dates
-            if is_line_working(
-                calendar_date,
-                _lc[_ln]["days"],
-                holiday_day_set,
-                downtime_sets[_ln],
+    evaluation_calendar_dates = [
+        pd.Timestamp(date).normalize()
+        for date in calendar_dates
+        if (
+            pd.Timestamp(date).normalize()
+            >= evaluation_start_date
+        )
+    ]
+
+    downtime_sets = {}
+
+    for line in ["B", "G", "D"]:
+        active_evaluation_dates = [
+            date
+            for date in evaluation_calendar_dates
+            if get_daily_line_hours(
+                evaluation_profile,
+                line,
+                date,
+            ) > 0
+        ]
+
+        downtime_sets[line] = (
+            make_monthly_downtime_set(
+                scenario.get(
+                    f"Line {line} Downtime Days/Month",
+                    0,
+                ),
+                active_evaluation_dates,
             )
         )
-        for _ln in ["B", "G", "D"]
+
+    daily_capacity_minutes = {
+        line: {}
+        for line in ["B", "G", "D"]
+    }
+
+    working_days_by_line = {
+        line: set()
+        for line in ["B", "G", "D"]
+    }
+
+    for calendar_date in calendar_dates:
+        calendar_date = pd.Timestamp(
+            calendar_date
+        ).normalize()
+
+        profile = (
+            initialization_profile
+            if calendar_date < evaluation_start_date
+            else evaluation_profile
+        )
+
+        for line in ["B", "G", "D"]:
+            daily_hours = get_daily_line_hours(
+                profile,
+                line,
+                calendar_date,
+            )
+
+            if (
+                calendar_date in holiday_day_set
+                or calendar_date in downtime_sets[line]
+            ):
+                daily_hours = 0.0
+
+            capacity_minutes = (
+                float(daily_hours)
+                * 60.0
+            )
+
+            daily_capacity_minutes[line][
+                calendar_date
+            ] = capacity_minutes
+
+            if capacity_minutes > 0:
+                working_days_by_line[line].add(
+                    calendar_date
+                )
+
+    working_days_by_line = {
+        line: frozenset(dates)
+        for line, dates
+        in working_days_by_line.items()
     }
 
     jobs_df = assign_capacity_release_dates(
         jobs_df=jobs_df,
         calendar_dates=calendar_dates,
-        working_days_by_line=_wd,
-        line_calendar=_lc,
+        working_days_by_line=working_days_by_line,
+        daily_capacity_minutes=daily_capacity_minutes,
+        evaluation_start_date=evaluation_start_date,
     )
 
     pending_jobs = jobs_df.to_dict(
@@ -1716,9 +1926,22 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     ready_jobs = []
     pending_position = 0
 
-    line_state = {line: {"used_today": 0, "processing": 0, "setup": 0, "tons": 0,
-                         "last_sku": None, "last_port": None, "last_allergen": 0, "last_color": None}
-                  for line in ["B", "G", "D"]}
+    line_state = {
+        line: {
+            "used_today": 0,
+            "processing": 0,
+            "setup": 0,
+            "tons": 0,
+            "evaluation_processing": 0,
+            "evaluation_setup": 0,
+            "evaluation_tons": 0,
+            "last_sku": None,
+            "last_port": None,
+            "last_allergen": 0,
+            "last_color": None,
+        }
+        for line in ["B", "G", "D"]
+    }
     planned_jobs = []
     seq = 1
 
@@ -1733,7 +1956,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         active_lines = [
             line
             for line in ["B", "G", "D"]
-            if calendar_date in _wd[line]
+            if calendar_date in working_days_by_line[line]
         ]
 
         for line in active_lines:
@@ -1786,16 +2009,36 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
         count_batch_today = 0
         while ready_jobs:
-            if (
-                batch_limit_per_day < 999999
-                and count_batch_today >= batch_limit_per_day
+            best_idx = (
+                best_line
+            ) = best_finish = best_setup = best_tfill = best_speed = None
+            for idx, job in enumerate(
+                ready_jobs[:candidate_window]
             ):
-                break
-            best_idx = best_line = best_finish = best_setup = best_tfill = best_speed = None
-            for idx, job in enumerate(ready_jobs[:candidate_window]):
+                job_role = str(
+                    job.get(
+                        "Data Role",
+                        "evaluation",
+                    )
+                ).strip().lower()
+
+                if (
+                    job_role == "evaluation"
+                    and batch_limit_per_day < 999999
+                    and count_batch_today
+                    >= batch_limit_per_day
+                ):
+                    continue
+
                 candidates = []
-                for line in active_lines:   # OPTIMIZATION: hanya cek lini yang aktif hari ini
-                    cap_mins = _lc[line]["cap_mins"]
+
+                for line in active_lines:
+                    cap_mins = float(
+                        daily_capacity_minutes[line].get(
+                            calendar_date,
+                            0.0,
+                        )
+                    )
                     speed = job["Speed D"] if line == "D" else job["Speed BG"]
                     if speed > 0 and job["SKU Gram"] > 0:
                         tfill = job["Batch Ton"] * 1_000_000 / job["SKU Gram"] / speed
@@ -1815,6 +2058,27 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             line_state[best_line]["processing"] += best_tfill
             line_state[best_line]["setup"] += best_setup
             line_state[best_line]["tons"] += job["Batch Ton"]
+
+            scheduled_role = str(
+                job.get(
+                    "Data Role",
+                    "evaluation",
+                )
+            ).strip().lower()
+
+            if scheduled_role == "evaluation":
+                line_state[best_line][
+                    "evaluation_processing"
+                ] += best_tfill
+
+                line_state[best_line][
+                    "evaluation_setup"
+                ] += best_setup
+
+                line_state[best_line][
+                    "evaluation_tons"
+                ] += job["Batch Ton"]
+
             line_state[best_line]["last_sku"] = job["SKU"]
             line_state[best_line]["last_port"] = job["Port Type"]
             line_state[best_line]["last_allergen"] = job["Allergen"]
@@ -1874,7 +2138,9 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 ),
             })
             seq += 1
-            count_batch_today += 1
+
+            if scheduled_role == "evaluation":
+                count_batch_today += 1
     planned_jobs_df = pd.DataFrame(
         planned_jobs
     )
@@ -2064,9 +2330,15 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         + evaluation_production
     )
 
-    tons_b = line_state["B"]["tons"]
-    tons_g = line_state["G"]["tons"]
-    tons_d = line_state["D"]["tons"]
+    tons_b = line_state["B"][
+        "evaluation_tons"
+    ]
+    tons_g = line_state["G"][
+        "evaluation_tons"
+    ]
+    tons_d = line_state["D"][
+        "evaluation_tons"
+    ]
 
     finished_ton = evaluation_production
 
@@ -2083,20 +2355,67 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         if target_demand > 0
         else 0
     )
-    # OPTIMIZATION: gunakan precomputed working days untuk total_available
-    total_available = {
-        line: len(_wd[line]) * _lc[line]["cap_mins"]
+
+    evaluation_available = {
+        line: sum(
+            minutes
+            for date, minutes
+            in daily_capacity_minutes[line].items()
+            if date >= evaluation_start_date
+        )
         for line in ["B", "G", "D"]
     }
-    util_b = (line_state["B"]["processing"] + line_state["B"]["setup"]) / total_available["B"] * 100 if total_available["B"] > 0 else 0
-    util_g = (line_state["G"]["processing"] + line_state["G"]["setup"]) / total_available["G"] * 100 if total_available["G"] > 0 else 0
-    util_d = (line_state["D"]["processing"] + line_state["D"]["setup"]) / total_available["D"] * 100 if total_available["D"] > 0 else 0
+
+    util_b = (
+        (
+            line_state["B"]["evaluation_processing"]
+            + line_state["B"]["evaluation_setup"]
+        )
+        / evaluation_available["B"]
+        * 100
+        if evaluation_available["B"] > 0
+        else 0
+    )
+
+    util_g = (
+        (
+            line_state["G"]["evaluation_processing"]
+            + line_state["G"]["evaluation_setup"]
+        )
+        / evaluation_available["G"]
+        * 100
+        if evaluation_available["G"] > 0
+        else 0
+    )
+
+    util_d = (
+        (
+            line_state["D"]["evaluation_processing"]
+            + line_state["D"]["evaluation_setup"]
+        )
+        / evaluation_available["D"]
+        * 100
+        if evaluation_available["D"] > 0
+        else 0
+    )
     util_dict = {"Filling B": util_b, "Filling G": util_g, "Filling D": util_d}
     bottleneck = max(util_dict, key=util_dict.get)
     return {
         "Scenario": scenario_code,
         "Simulation Start": simulation_start.strftime("%Y-%m-%d"),
         "Simulation End": simulation_end.strftime("%Y-%m-%d"),
+        "Evaluation Calendar Start": (
+            evaluation_start_date.strftime(
+                "%Y-%m-%d"
+            )
+        ),
+        "Initialization Schedule": (
+            "Kondisi aktual historis"
+        ),
+        "Evaluation Schedule Mode": scenario.get(
+            "Evaluation Schedule Mode",
+            "legacy",
+        ),
         "Holiday Mode": scenario.get(
             "Holiday Mode",
             "none",
@@ -2199,7 +2518,18 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         "Planning Ratio (%)": round(finished_ratio, 2), "Finished Ratio (%)": round(finished_ratio, 2), "Unmet Demand Ton": round(unmet_demand, 2),
         "Tons B": round(tons_b, 2), "Tons G": round(tons_g, 2), "Tons D": round(tons_d, 2),
         "Util Filling B (%)": round(util_b, 2), "Util Filling G (%)": round(util_g, 2), "Util Filling D (%)": round(util_d, 2),
-        "Setup Minute B": round(line_state["B"]["setup"], 2), "Setup Minute G": round(line_state["G"]["setup"], 2), "Setup Minute D": round(line_state["D"]["setup"], 2),
+        "Setup Minute B": round(
+            line_state["B"]["evaluation_setup"],
+            2,
+        ),
+        "Setup Minute G": round(
+            line_state["G"]["evaluation_setup"],
+            2,
+        ),
+        "Setup Minute D": round(
+            line_state["D"]["evaluation_setup"],
+            2,
+        ),
         "Bottleneck Area": bottleneck,
         "Planner Status": "Target Terpenuhi" if finished_ton >= target_demand - 0.05 else "Target Tidak Terpenuhi",
         "Capacity Status": "Kapasitas Mencukupi" if unmet_demand <= 0.05 else "Kapasitas Tidak Mencukupi",
@@ -2261,8 +2591,23 @@ def run_des_simulation(
         d_downtime=d_downtime,
     )
 
+    evaluation_start_date = (
+        get_evaluation_calendar_start(
+            forecast_df
+        )
+    )
+
+    evaluation_calendar_dates = [
+        pd.Timestamp(date).normalize()
+        for date in calendar_dates
+        if (
+            pd.Timestamp(date).normalize()
+            >= evaluation_start_date
+        )
+    ]
+
     holiday_set = make_holiday_set(
-        calendar_dates,
+        evaluation_calendar_dates,
         holiday_mode=holiday_mode,
         holiday_cutoff_days=holiday_cutoff_days,
         holiday_dates_text=holiday_dates_text,
