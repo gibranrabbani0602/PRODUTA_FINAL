@@ -795,8 +795,31 @@ def expand_jobs(forecast_df, growth):
 
     working_df = forecast_df.copy()
 
+    working_df["Base Demand Ton"] = (
+        working_df["ForecastTon"]
+        .astype(float)
+        .clip(lower=0)
+    )
+
+    is_evaluation = (
+        working_df["DataRole"]
+        .astype(str)
+        .str.lower()
+        .eq("evaluation")
+    )
+
     working_df["Growth Demand Ton"] = (
-        working_df["ForecastTon"].astype(float)
+        working_df["Base Demand Ton"]
+    )
+
+    working_df.loc[
+        is_evaluation,
+        "Growth Demand Ton",
+    ] = (
+        working_df.loc[
+            is_evaluation,
+            "Base Demand Ton",
+        ]
         * (1 + float(growth))
     )
 
@@ -1012,7 +1035,27 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     simulation_start, simulation_end, calendar_dates = (
         build_simulation_calendar(forecast_df)
     )
-    target_demand = forecast_df["ForecastTon"].sum() * (1 + growth)
+    evaluation_mask = (
+        forecast_df["DataRole"]
+        .astype(str)
+        .str.lower()
+        .eq("evaluation")
+    )
+
+    target_demand = (
+        forecast_df.loc[
+            evaluation_mask,
+            "ForecastTon",
+        ].sum()
+        * (1 + growth)
+    )
+
+    initialization_demand = (
+        forecast_df.loc[
+            ~evaluation_mask,
+            "ForecastTon",
+        ].sum()
+    )
     jobs_df = expand_jobs(forecast_df, growth)
     if len(jobs_df) == 0:
         return {}, pd.DataFrame()
@@ -1188,6 +1231,14 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         "Line D Days": scenario["Line D Days"], "Line D Hours": scenario["Line D Hours"],
         "Batch Mode": scenario["Batch Mode"], "Growth": scenario["Growth"],
         "Line B Downtime Days/Month": scenario.get("Line B Downtime Days/Month", 0), "Line G Downtime Days/Month": scenario.get("Line G Downtime Days/Month", 0), "Line D Downtime Days/Month": scenario.get("Line D Downtime Days/Month", 0),
+        "Initialization Demand Ton": round(
+            initialization_demand,
+            2,
+        ),
+        "Evaluation Demand Ton": round(
+            target_demand,
+            2,
+        ),
         "Target Demand Ton": round(target_demand, 2), "Planned Ton": round(finished_ton, 2), "Tons Finished": round(finished_ton, 2),
         "Planning Ratio (%)": round(finished_ratio, 2), "Finished Ratio (%)": round(finished_ratio, 2), "Unmet Demand Ton": round(unmet_demand, 2),
         "Tons B": round(tons_b, 2), "Tons G": round(tons_g, 2), "Tons D": round(tons_d, 2),
