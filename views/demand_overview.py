@@ -302,38 +302,6 @@ def _tab_forecasting():
         )
 
     # ── C: Parameter & Run ───────────────────────────────────────────────
-    st.markdown(
-        "<div class='section-title'>"
-        "PERIODE INISIALISASI"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    use_initialization = st.checkbox(
-        "Gunakan 12 bulan kebutuhan aktual "
-        "sebelum forecast sebagai initialization",
-        value=True,
-        key="use_des_initialization",
-    )
-
-    if use_initialization:
-        if (
-            isinstance(
-                history_df,
-                pd.DataFrame,
-            )
-            and not history_df.empty
-        ):
-            st.success(
-                "Data historis tersedia dan akan "
-                "digunakan untuk membentuk kondisi awal."
-            )
-        else:
-            st.warning(
-                "Data historis belum tersedia. "
-                "Upload data historis pada tab "
-                "FORECASTING terlebih dahulu."
-            )
     st.markdown("<div class='section-title'>PARAMETER FORECAST</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1: method  = st.selectbox("Metode", ["Auto (Prophet + CrostonSBA)","Prophet","CrostonSBA"], key="fc_meth")
@@ -641,7 +609,39 @@ def _tab_des_input():
                 st.error(f"Gagal: {e}")
     if master_asil is None:
         return
+    st.markdown(
+        "<div class='section-title'>"
+        "PERIODE INISIALISASI"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
+    use_initialization = st.checkbox(
+        "Gunakan 12 bulan kebutuhan aktual "
+        "sebelum forecast sebagai initialization",
+        value=True,
+        key="use_des_initialization",
+    )
+
+    if use_initialization:
+        if (
+            isinstance(
+                history_df,
+                pd.DataFrame,
+            )
+            and not history_df.empty
+        ):
+            st.success(
+                "Data historis tersedia dan akan "
+                "digunakan untuk membentuk kondisi awal."
+            )
+        else:
+            st.warning(
+                "Data historis belum tersedia. "
+                "Upload data historis pada tab "
+                "FORECASTING terlebih dahulu."
+            )
+          
     st.markdown("<div class='section-title'>PARAMETER</div>", unsafe_allow_html=True)
     p1, p2 = st.columns(2)
     with p1: adj = st.slider("Penyesuaian Forecast (%)", -30.0, 30.0, 0.0, 0.5, key="des_adj")
