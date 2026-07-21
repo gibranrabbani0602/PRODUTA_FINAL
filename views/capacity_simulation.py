@@ -218,7 +218,20 @@ def render():
     st.markdown("<div class='section-title'>Business Scenario</div>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        batch_options = st.multiselect("Batch Mode", ["B35", "BLOSS"], default=["B35", "BLOSS"])
+        batch_limit = st.number_input(
+            "Batas total lot per hari",
+            min_value=0,
+            max_value=500,
+            value=0,
+            step=1,
+            help=(
+                "0 = tanpa batas atau BLOSS. "
+                "Nilai lainnya adalah maksimum total lot "
+                "seluruh lini dalam satu hari."
+            ),
+        )
+    
+        batch_options = [int(batch_limit)]
     with c2:
         gmin  = st.number_input("Growth min (%)", value=0.0, step=1.0, key="gmin")
         gmax  = st.number_input("Growth max (%)", value=0.0, step=1.0, key="gmax")
