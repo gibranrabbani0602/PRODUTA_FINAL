@@ -1069,12 +1069,15 @@ def generate_scenarios(
 
 def expand_jobs(forecast_df, growth):
     """
-    Membentuk lot produksi tetap 1 ton per SKU dengan
-    mempertimbangkan demand, sisa stok virtual, dan shelf life.
+    Membentuk pekerjaan produksi dengan ukuran maksimum 1 ton.
 
-    Pertumbuhan hanya diterapkan pada periode evaluation.
-    Stok virtual digunakan dengan prinsip FEFO.
-    Lot baru dibuat ketika stok valid tidak cukup memenuhi demand.
+    Setiap kebutuhan SKU-periode dipecah menjadi beberapa lot:
+    - lot penuh berukuran 1 ton; dan
+    - satu lot parsial terakhir bila masih ada sisa kebutuhan.
+
+    Total tonase pekerjaan selalu sama dengan demand. Dengan demikian,
+    initialization maupun evaluation tidak menciptakan stok hanya karena
+    pembulatan lot. Pertumbuhan hanya diterapkan pada periode evaluation.
     """
     jobs = []
 
@@ -1129,11 +1132,8 @@ def expand_jobs(forecast_df, growth):
 
     for sku_id, sku_df in grouped_skus:
         cumulative_demand_ton = 0.0
+        cumulative_job_ton = 0.0
         lot_number = 0
-
-        # Stok virtual hanya digunakan untuk menentukan
-        # berapa lot 1 ton yang perlu dibuat.
-        virtual_inventory = []
 
         sku_df = sku_df.sort_values(
             by=[
@@ -1152,6 +1152,9 @@ def expand_jobs(forecast_df, growth):
                 float(row["Growth Demand Ton"]),
                 0.0,
             )
+
+            if monthly_demand_ton <= LOT_ROUNDING_EPSILON:
+                continue
 
             cumulative_demand_ton += monthly_demand_ton
 
@@ -1188,45 +1191,17 @@ def expand_jobs(forecast_df, growth):
                 0,
             )
 
-            # Buang stok virtual yang sudah tidak valid
-            # pada due date bulan ini.
-            virtual_inventory = [
-                lot
-                for lot in virtual_inventory
-                if (
-                    lot["remaining"] > LOT_ROUNDING_EPSILON
-                    and lot["usable_until"] >= due_date
-                )
-            ]
-
-            virtual_inventory.sort(
-                key=lambda lot: (
-                    lot["usable_until"],
-                    lot["lot_number"],
-                )
+            virtual_production_date = (
+                due_date
+                - pd.Timedelta(days=1)
             )
 
-            demand_remaining = monthly_demand_ton
-
-            # Gunakan stok valid yang paling cepat habis masa
-            # gunanya terlebih dahulu (FEFO).
-            for lot in virtual_inventory:
-                if demand_remaining <= LOT_ROUNDING_EPSILON:
-                    break
-
-                used_ton = min(
-                    demand_remaining,
-                    lot["remaining"],
+            virtual_usable_until = (
+                virtual_production_date
+                + pd.DateOffset(
+                    months=usable_age_months
                 )
-
-                demand_remaining -= used_ton
-                lot["remaining"] -= used_ton
-
-            virtual_inventory = [
-                lot
-                for lot in virtual_inventory
-                if lot["remaining"] > LOT_ROUNDING_EPSILON
-            ]
+            ).normalize()
 
             item_name = str(
                 row["ItemName"]
@@ -1237,44 +1212,29 @@ def expand_jobs(forecast_df, growth):
                 or "anmum" in normalize_key(item_name)
             )
 
-            # Jika stok valid tidak cukup, buat lot baru
-            # dengan ukuran tetap tepat 1 ton.
+            demand_remaining = monthly_demand_ton
+
             while demand_remaining > LOT_ROUNDING_EPSILON:
                 lot_number += 1
 
-                virtual_production_date = (
-                    due_date
-                    - pd.Timedelta(days=1)
-                )
-                
-                virtual_usable_until = (
-                    virtual_production_date
-                    + pd.DateOffset(
-                        months=usable_age_months
-                    )
-                ).normalize()
-
-                new_virtual_lot = {
-                    "lot_number": lot_number,
-                    "remaining": FIXED_LOT_TON,
-                    "usable_until": virtual_usable_until,
-                }
-
-                used_from_new_lot = min(
+                batch_ton = min(
+                    FIXED_LOT_TON,
                     demand_remaining,
-                    new_virtual_lot["remaining"],
                 )
 
-                demand_remaining -= used_from_new_lot
-                new_virtual_lot["remaining"] -= used_from_new_lot
+                # Hindari residu floating point seperti
+                # 0.3999999997 pada lot parsial terakhir.
+                batch_ton = round(
+                    float(batch_ton),
+                    9,
+                )
 
-                if (
-                    new_virtual_lot["remaining"]
-                    > LOT_ROUNDING_EPSILON
-                ):
-                    virtual_inventory.append(
-                        new_virtual_lot
-                    )
+                demand_remaining = max(
+                    demand_remaining - batch_ton,
+                    0.0,
+                )
+
+                cumulative_job_ton += batch_ton
 
                 jobs.append({
                     "Lot ID": (
@@ -1302,7 +1262,14 @@ def expand_jobs(forecast_df, growth):
                         lot_number
                     ),
 
-                    "Batch Ton": FIXED_LOT_TON,
+                    "Batch Ton": batch_ton,
+                    "Lot Type": (
+                        "Full"
+                        if abs(
+                            batch_ton - FIXED_LOT_TON
+                        ) <= LOT_ROUNDING_EPSILON
+                        else "Partial"
+                    ),
 
                     "SKU Gram": float(
                         row["SkuGr"]
@@ -1358,7 +1325,7 @@ def expand_jobs(forecast_df, growth):
                         )
                     ),
                     "Lot Creation Reason": (
-                        "Valid inventory insufficient"
+                        "Exact demand requirement"
                     ),
 
                     "Mini Blend Minute": (
@@ -1368,11 +1335,13 @@ def expand_jobs(forecast_df, growth):
                     ),
                 })
 
-            virtual_inventory.sort(
-                key=lambda lot: (
-                    lot["usable_until"],
-                    lot["lot_number"],
-                )
+        if abs(
+            cumulative_job_ton
+            - cumulative_demand_ton
+        ) > 1e-6:
+            raise ValueError(
+                "Total lot tidak sama dengan demand untuk SKU "
+                + str(sku_id)
             )
 
     jobs_df = pd.DataFrame(jobs)
@@ -1398,7 +1367,7 @@ def expand_jobs(forecast_df, growth):
             True,
         ],
         kind="stable",
-    ).reset_index(drop=True)   
+    ).reset_index(drop=True)
 
 
 def calc_setup(line_state, job):
@@ -2559,9 +2528,8 @@ def run_des_simulation(
     g_downtime=0,
     d_downtime=0,
     holiday_mode="none",
-    evaluation_schedule_mode="management",
+    evaluation_schedule_mode=None,
     evaluation_weekly_hours=None,
-    # Backward-compat: availability diterima tetapi diabaikan
     # Backward-compat: availability diterima tetapi diabaikan
     b_availability=100,
     g_availability=100,
@@ -2593,57 +2561,67 @@ def run_des_simulation(
         g_downtime=g_downtime,
         d_downtime=d_downtime,
     )
-    schedule_mode = str(
-        evaluation_schedule_mode or "management"
-    ).strip().lower()
-    
-    valid_schedule_modes = {
-        "actual",
-        "management",
-        "custom",
-    }
-    
-    if schedule_mode not in valid_schedule_modes:
-        raise ValueError(
-            "Mode jadwal evaluation harus actual, "
-            "management, atau custom."
-        )
-    
-    scenario_df["Evaluation Schedule Mode"] = (
-        schedule_mode
-    )
-    
-    if schedule_mode == "custom":
-        validated_weekly_hours = (
-            validate_weekly_hours(
-                evaluation_weekly_hours or {}
+
+    # Kompatibilitas sementara dengan UI jadwal preset yang
+    # masih ada pada kondisi GitHub saat ini. Ketika parameter
+    # tidak dikirim, skenario tetap memakai konfigurasi faktorial
+    # hari kerja dan jam kerja per lini (mode legacy).
+    if evaluation_schedule_mode is not None:
+        schedule_mode = str(
+            evaluation_schedule_mode
+        ).strip().lower()
+
+        valid_schedule_modes = {
+            "actual",
+            "management",
+            "custom",
+        }
+
+        if schedule_mode not in valid_schedule_modes:
+            raise ValueError(
+                "Mode jadwal evaluation harus actual, "
+                "management, atau custom."
             )
+
+        scenario_df["Evaluation Schedule Mode"] = (
+            schedule_mode
         )
-    
-        scenario_df["Evaluation Weekly Hours"] = [
-            validated_weekly_hours.copy()
-            for _ in range(len(scenario_df))
-        ]
-    else:
-        scenario_df["Evaluation Weekly Hours"] = [
-            None
-            for _ in range(len(scenario_df))
-        ]
-    
-    schedule_label = {
-        "actual": "KONDISI AKTUAL",
-        "management": "USULAN MANAJEMEN",
-        "custom": "JADWAL KHUSUS",
-    }[schedule_mode]
-    
-    scenario_df["Scenario"] = scenario_df.apply(
-        lambda row: (
-            f"{schedule_label} | "
-            f"{row['Batch Mode']} | "
-            f"G{int(float(row['Growth']) * 100)}%"
-        ),
-        axis=1,
-    )
+
+        if schedule_mode == "custom":
+            validated_weekly_hours = (
+                validate_weekly_hours(
+                    evaluation_weekly_hours or {}
+                )
+            )
+
+            scenario_df["Evaluation Weekly Hours"] = [
+                {
+                    line: list(hours)
+                    for line, hours
+                    in validated_weekly_hours.items()
+                }
+                for _ in range(len(scenario_df))
+            ]
+        else:
+            scenario_df["Evaluation Weekly Hours"] = [
+                None
+                for _ in range(len(scenario_df))
+            ]
+
+        schedule_label = {
+            "actual": "KONDISI AKTUAL",
+            "management": "USULAN MANAJEMEN",
+            "custom": "JADWAL KHUSUS",
+        }[schedule_mode]
+
+        scenario_df["Scenario"] = scenario_df.apply(
+            lambda row: (
+                f"{schedule_label} | "
+                f"{row['Batch Mode']} | "
+                f"G{int(float(row['Growth']) * 100)}%"
+            ),
+            axis=1,
+        )
 
     evaluation_start_date = (
         get_evaluation_calendar_start(
