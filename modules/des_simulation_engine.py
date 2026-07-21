@@ -2659,39 +2659,23 @@ def run_des_simulation(
         
     scenario_list = [row.to_dict() for _, row in scenario_df.iterrows()]
     
-    args_list = [
-        (forecast_df, sc, holiday_set) for sc in scenario_list
-    ]
+    # Jalankan skenario secara berurutan agar aman
+    # untuk keterbatasan RAM Streamlit Cloud.
+    results = []
 
-    # ── Parallel execution ────────────────────────────────────────────────────
-    # Gunakan joblib dengan backend loky (works on Windows + Linux).
-    # n_jobs=-1 = semua CPU core tersedia. Fallback ke sequential jika gagal.
-    try:
-        from joblib import Parallel, delayed
-
-        def _run(args):
-            _fdf, _sc, _hs = args
-            return simulate_one_scenario(_fdf, pd.Series(_sc), _hs, DEFAULT_CANDIDATE_WINDOW)
-
-        parallel_results = Parallel(n_jobs=-1, backend="loky", verbose=0)(
-            delayed(_run)(args) for args in args_list
+    for scenario in scenario_list:
+        result, _ = simulate_one_scenario(
+            forecast_df,
+            pd.Series(scenario),
+            holiday_set,
+            DEFAULT_CANDIDATE_WINDOW,
         )
-    except Exception:
-        # Fallback: sequential (aman untuk semua platform)
-        parallel_results = [
-            simulate_one_scenario(forecast_df, pd.Series(sc), holiday_set, DEFAULT_CANDIDATE_WINDOW)
-            for sc in scenario_list
-        ]
 
-    results, all_planned = [], []
-    for result, planned in parallel_results:
         if result:
             results.append(result)
-        if planned is not None and len(planned) > 0:
-            all_planned.append(planned)
 
     result_df = pd.DataFrame(results)
-    
+
     if not result_df.empty:
         result_df[
             "Highest Utilization (%)"
@@ -2728,7 +2712,28 @@ def run_des_simulation(
             .reset_index(drop=True)
         )
 
-    planned_jobs_df = pd.concat(all_planned, ignore_index=True) if all_planned else pd.DataFrame()
+        # Detail Production Plan hanya dibuat ulang
+        # untuk skenario terbaik agar RAM tidak penuh.
+        best_scenario_code = str(
+            result_df.iloc[0]["Scenario"]
+        )
+
+        best_scenario = next(
+            scenario
+            for scenario in scenario_list
+            if str(scenario["Scenario"])
+            == best_scenario_code
+        )
+
+        _, planned_jobs_df = simulate_one_scenario(
+            forecast_df,
+            pd.Series(best_scenario),
+            holiday_set,
+            DEFAULT_CANDIDATE_WINDOW,
+        )
+
+    else:
+        planned_jobs_df = pd.DataFrame()
     sku_count = (
         int(forecast_df["SkuId"].nunique())
         if "SkuId" in forecast_df.columns
