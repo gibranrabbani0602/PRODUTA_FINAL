@@ -1737,155 +1737,155 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     planned_jobs_df = pd.DataFrame(
         planned_jobs
     )
-        stock_backlog_df = (
-            build_inventory_backlog_table(
-                forecast_df=forecast_df,
-                planned_jobs_df=planned_jobs_df,
-                scenario_code=scenario_code,
-                growth=growth,
-            )
+    stock_backlog_df = (
+        build_inventory_backlog_table(
+            forecast_df=forecast_df,
+            planned_jobs_df=planned_jobs_df,
+            scenario_code=scenario_code,
+            growth=growth,
         )
-    
-        if stock_backlog_df.empty:
-            demand_fulfilled_ton = 0.0
-            demand_fulfillment_pct = 0.0
-            on_time_fulfilled_ton = 0.0
-            on_time_fulfillment_pct = 0.0
-            late_demand_ton = 0.0
-            ending_backlog_ton = 0.0
-            ending_inventory_ton = 0.0
-            expired_inventory_ton = 0.0
-            sku_period_on_time_pct = 0.0
-            late_sku_periods = 0
-            maximum_delay_days = 0
-        else:
-            evaluation_ledger = (
-                stock_backlog_df[
-                    stock_backlog_df["Data Role"]
-                    .astype(str)
-                    .str.lower()
-                    .eq("evaluation")
-                ]
-                .copy()
-            )
-    
-            evaluation_demand_ton = (
-                evaluation_ledger["Demand Ton"]
-                .sum()
-            )
-    
-            demand_fulfilled_ton = (
-                evaluation_ledger[
-                    "Total Fulfilled Ton"
-                ]
-                .sum()
-            )
-    
-            on_time_fulfilled_ton = (
-                evaluation_ledger[
-                    "On-Time Fulfilled Ton"
-                ]
-                .sum()
-            )
-    
-            late_demand_ton = (
+    )
+
+    if stock_backlog_df.empty:
+        demand_fulfilled_ton = 0.0
+        demand_fulfillment_pct = 0.0
+        on_time_fulfilled_ton = 0.0
+        on_time_fulfillment_pct = 0.0
+        late_demand_ton = 0.0
+        ending_backlog_ton = 0.0
+        ending_inventory_ton = 0.0
+        expired_inventory_ton = 0.0
+        sku_period_on_time_pct = 0.0
+        late_sku_periods = 0
+        maximum_delay_days = 0
+    else:
+        evaluation_ledger = (
+            stock_backlog_df[
+                stock_backlog_df["Data Role"]
+                .astype(str)
+                .str.lower()
+                .eq("evaluation")
+            ]
+            .copy()
+        )
+
+        evaluation_demand_ton = (
+            evaluation_ledger["Demand Ton"]
+            .sum()
+        )
+
+        demand_fulfilled_ton = (
+            evaluation_ledger[
+                "Total Fulfilled Ton"
+            ]
+            .sum()
+        )
+
+        on_time_fulfilled_ton = (
+            evaluation_ledger[
+                "On-Time Fulfilled Ton"
+            ]
+            .sum()
+        )
+
+        late_demand_ton = (
+            evaluation_ledger[
+                "Late Demand Ton"
+            ]
+            .sum()
+        )
+
+        ending_backlog_ton = (
+            evaluation_ledger[
+                "Final Backlog Ton"
+            ]
+            .sum()
+        )
+
+        demand_fulfillment_pct = (
+            demand_fulfilled_ton
+            / evaluation_demand_ton
+            * 100
+            if evaluation_demand_ton > 0
+            else 0.0
+        )
+
+        on_time_fulfillment_pct = (
+            on_time_fulfilled_ton
+            / evaluation_demand_ton
+            * 100
+            if evaluation_demand_ton > 0
+            else 0.0
+        )
+
+        late_sku_periods = int(
+            (
                 evaluation_ledger[
                     "Late Demand Ton"
                 ]
-                .sum()
+                > LOT_ROUNDING_EPSILON
             )
-    
-            ending_backlog_ton = (
-                evaluation_ledger[
-                    "Final Backlog Ton"
-                ]
-                .sum()
-            )
-    
-            demand_fulfillment_pct = (
-                demand_fulfilled_ton
-                / evaluation_demand_ton
-                * 100
-                if evaluation_demand_ton > 0
-                else 0.0
-            )
-    
-            on_time_fulfillment_pct = (
-                on_time_fulfilled_ton
-                / evaluation_demand_ton
-                * 100
-                if evaluation_demand_ton > 0
-                else 0.0
-            )
-    
-            late_sku_periods = int(
-                (
-                    evaluation_ledger[
-                        "Late Demand Ton"
-                    ]
-                    > LOT_ROUNDING_EPSILON
-                )
-                .sum()
-            )
-    
-            sku_period_on_time_pct = (
-                (
-                    len(evaluation_ledger)
-                    - late_sku_periods
-                )
-                / len(evaluation_ledger)
-                * 100
-                if len(evaluation_ledger) > 0
-                else 0.0
-            )
-    
-            maximum_delay_days = int(
-                pd.to_numeric(
-                    evaluation_ledger[
-                        "Delay Days"
-                    ],
-                    errors="coerce",
-                )
-                .fillna(0)
-                .max()
-            )
-    
-            latest_sku_rows = (
-                stock_backlog_df
-                .sort_values(
-                    by=[
-                        "SKU",
-                        "Due Date",
-                    ],
-                    kind="stable",
-                )
-                .groupby(
-                    "SKU",
-                    sort=False,
-                )
-                .tail(1)
-            )
-    
-            ending_inventory_ton = (
-                latest_sku_rows[
-                    "Inventory After Due Ton"
-                ]
-                .sum()
-            )
-    
-            expired_inventory_ton = (
-                latest_sku_rows[
-                    "Expired Inventory Until Due Ton"
-                ]
-                .sum()
-            )
-    
-        all_demand_on_time = (
-            late_demand_ton
-            <= LOT_ROUNDING_EPSILON
-            and ending_backlog_ton
-            <= LOT_ROUNDING_EPSILON
+            .sum()
         )
+
+        sku_period_on_time_pct = (
+            (
+                len(evaluation_ledger)
+                - late_sku_periods
+            )
+            / len(evaluation_ledger)
+            * 100
+            if len(evaluation_ledger) > 0
+            else 0.0
+        )
+
+        maximum_delay_days = int(
+            pd.to_numeric(
+                evaluation_ledger[
+                    "Delay Days"
+                ],
+                errors="coerce",
+            )
+            .fillna(0)
+            .max()
+        )
+
+        latest_sku_rows = (
+            stock_backlog_df
+            .sort_values(
+                by=[
+                    "SKU",
+                    "Due Date",
+                ],
+                kind="stable",
+            )
+            .groupby(
+                "SKU",
+                sort=False,
+            )
+            .tail(1)
+        )
+
+        ending_inventory_ton = (
+            latest_sku_rows[
+                "Inventory After Due Ton"
+            ]
+            .sum()
+        )
+
+        expired_inventory_ton = (
+            latest_sku_rows[
+                "Expired Inventory Until Due Ton"
+            ]
+            .sum()
+        )
+
+    all_demand_on_time = (
+        late_demand_ton
+        <= LOT_ROUNDING_EPSILON
+        and ending_backlog_ton
+        <= LOT_ROUNDING_EPSILON
+    )
     if planned_jobs_df.empty:
         initialization_production = 0.0
         evaluation_production = 0.0
@@ -2173,7 +2173,8 @@ def run_des_simulation(
             all_planned.append(planned)
 
     result_df = pd.DataFrame(results)
-        if not result_df.empty:
+    
+    if not result_df.empty:
         result_df[
             "Highest Utilization (%)"
         ] = result_df[
