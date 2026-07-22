@@ -2407,44 +2407,43 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             group_key
         )
 
-# Kelompok setiap SKU diurutkan:
-# release paling awal, due date paling awal,
-# lalu nomor lot.
-for sku, group_keys in (
-    sku_group_queues.items()
-):
-    group_keys.sort(
-        key=lambda group_key: (
-            pd.Timestamp(
-                job_groups[
-                    group_key
-                ][0]["Release Date"]
-            ),
-            pd.Timestamp(
-                job_groups[
-                    group_key
-                ][0]["Due Date"]
-            ),
-            int(
-                job_groups[
-                    group_key
-                ][0]["Lot Number"]
-            ),
-            round(
-                float(
+    # Kelompok setiap SKU diurutkan:
+    # release paling awal, due date paling awal,
+    # lalu nomor lot.
+    for sku, group_keys in (
+        sku_group_queues.items()
+    ):
+        group_keys.sort(
+            key=lambda group_key: (
+                pd.Timestamp(
                     job_groups[
                         group_key
-                    ][0]["Batch Ton"]
+                    ][0]["Release Date"]
                 ),
-                9,
-            ),
+                pd.Timestamp(
+                    job_groups[
+                        group_key
+                    ][0]["Due Date"]
+                ),
+                int(
+                    job_groups[
+                        group_key
+                    ][0]["Lot Number"]
+                ),
+                round(
+                    float(
+                        job_groups[
+                            group_key
+                        ][0]["Batch Ton"]
+                    ),
+                    9,
+                ),
+            )
         )
-    )
 
-    sku_group_queues[sku] = deque(
-        group_keys
-    )
-
+        sku_group_queues[sku] = deque(
+            group_keys
+        )
     line_rank = {
         "B": 0,
         "G": 1,
