@@ -1,4 +1,5 @@
 import itertools
+from bisect import bisect_right
 from collections import deque
 import os
 import re
@@ -1776,50 +1777,70 @@ def build_operating_intervals(
 def find_next_operating_position(
     operating_intervals,
     requested_time,
+    interval_ends=None,
 ):
     """
-    Mencari posisi waktu kerja pertama yang tersedia
-    pada atau setelah requested_time.
+    Mencari interval kerja berikutnya menggunakan
+    binary search, bukan membaca kalender dari awal.
     """
     requested_time = pd.Timestamp(
         requested_time
     )
 
-    for interval_index, interval in enumerate(
+    if not operating_intervals:
+        return None
+
+    if interval_ends is None:
+        interval_ends = [
+            pd.Timestamp(
+                interval["end"]
+            )
+            for interval
+            in operating_intervals
+        ]
+
+    # Interval yang berakhir tepat pada requested_time
+    # dianggap sudah selesai. Ambil interval sesudahnya.
+    interval_index = bisect_right(
+        interval_ends,
+        requested_time,
+    )
+
+    if interval_index >= len(
         operating_intervals
     ):
-        interval_start = pd.Timestamp(
-            interval["start"]
-        )
+        return None
 
-        interval_end = pd.Timestamp(
-            interval["end"]
-        )
+    interval = operating_intervals[
+        interval_index
+    ]
 
-        if requested_time >= interval_end:
-            continue
+    interval_start = pd.Timestamp(
+        interval["start"]
+    )
 
-        actual_start = max(
-            requested_time,
-            interval_start,
-        )
+    interval_end = pd.Timestamp(
+        interval["end"]
+    )
 
-        return {
-            "interval_index": interval_index,
-            "start": actual_start,
-            "interval_start": interval_start,
-            "interval_end": interval_end,
-        }
+    actual_start = max(
+        requested_time,
+        interval_start,
+    )
 
-    return None
-
-
+    return {
+        "interval_index": interval_index,
+        "start": actual_start,
+        "interval_start": interval_start,
+        "interval_end": interval_end,
+    }
 def project_job_on_line(
     line,
     job,
     line_cursor,
     line_state,
     operating_intervals,
+    operating_interval_ends,
 ):
     """
     Mensimulasikan satu job pada satu lini tanpa langsung
@@ -1889,8 +1910,15 @@ def project_job_on_line(
 
     first_position = (
         find_next_operating_position(
-            operating_intervals,
-            requested_time,
+            operating_intervals=(
+                operating_intervals
+            ),
+            requested_time=(
+                requested_time
+            ),
+            interval_ends=(
+                operating_interval_ends
+            ),
         )
     )
 
@@ -2304,6 +2332,21 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         )
     )
 
+    # Daftar waktu akhir interval dibuat satu kali.
+    # Selanjutnya pencarian memakai binary search.
+    operating_interval_ends_by_line = {
+        line: [
+            pd.Timestamp(
+                interval["end"]
+            )
+            for interval
+            in operating_intervals_by_line[
+                line
+            ]
+        ]
+        for line in ["B", "G", "D"]
+    }
+
     # Lot-lot identik dikelompokkan agar heuristik
     # tidak menghitung kandidat yang sama ribuan kali.
     job_groups = {}
@@ -2606,6 +2649,11 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                                 line
                             ]
                         ),
+                        operating_interval_ends=(
+                            operating_interval_ends_by_line[
+                                line
+                            ]
+                        ),
                     )
                 )
 
@@ -2757,10 +2805,19 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         for line in ["B", "G", "D"]:
             position = (
                 find_next_operating_position(
-                    operating_intervals_by_line[
-                        line
-                    ],
-                    line_cursor[line],
+                    operating_intervals=(
+                        operating_intervals_by_line[
+                            line
+                        ]
+                    ),
+                    requested_time=(
+                        line_cursor[line]
+                    ),
+                    interval_ends=(
+                        operating_interval_ends_by_line[
+                            line
+                        ]
+                    ),
                 )
             )
 
