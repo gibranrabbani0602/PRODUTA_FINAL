@@ -1011,7 +1011,7 @@ def generate_scenarios(
 
     rows = []
 
-    combo in enumerate(combos_iter):
+    for idx, combo in enumerate(combos_iter):
         if idx >= int(max_scenarios):
             break
 
