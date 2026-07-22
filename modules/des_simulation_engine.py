@@ -1011,7 +1011,7 @@ def generate_scenarios(
 
     rows = []
 
-    for idx, combo in enumerate(combos_iter):
+    combo in enumerate(combos_iter):
         if idx >= int(max_scenarios):
             break
 
@@ -1914,7 +1914,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             best_idx = (
                 best_line
             ) = best_finish = best_setup = best_tfill = best_speed = None
-            for idx, job in enumerate(
+            
             for idx, job in enumerate(
                 ready_jobs
             ):
