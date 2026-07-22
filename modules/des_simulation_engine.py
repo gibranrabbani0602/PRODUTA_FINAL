@@ -46,7 +46,7 @@ FIXED_LOT_TON = 1.0
 LOT_ROUNDING_EPSILON = 1e-9
 
 DEFAULT_MAX_SCENARIOS = 100
-DEFAULT_CANDIDATE_WINDOW = 60
+DEFAULT_CANDIDATE_WINDOW = 12
 DEFAULT_PLANNED_PREVIEW_ROWS = 5000
 
 WEEKDAY_LABELS = [
@@ -2806,37 +2806,34 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     # 4. Lindungi SKU dengan pilihan lini terbatas.
                     compatibility_count,
 
-                    # 5. Lindungi shelf window yang lebih sempit.
+                    # 5. Lindungi shelf life yang lebih sempit.
                     shelf_window_days,
 
-                    # 6. Seimbangkan lini berdasarkan
-                    # waktu selesai yang diproyeksikan.
+                    # 6. Minimalkan setup sebelum memilih
+                    # lini berdasarkan waktu selesai.
+                    round(
+                        setup_minutes,
+                        6,
+                    ),
+
+                    # 7. Seimbangkan beban antarlini.
                     pd.Timestamp(
                         projection[
                             "finish_datetime"
                         ]
                     ),
 
-                    # 7. Bila waktu selesai sama,
-                    # pilih yang dapat mulai lebih awal.
+                    # 8. Pilih yang dapat mulai lebih awal.
                     pd.Timestamp(
                         projection[
                             "start_datetime"
                         ]
                     ),
 
-                    # 8. Hindari menunggu bila hasilnya setara.
+                    # 9. Hindari menunggu jika hasil setara.
                     wait_flag,
 
-                    # 9. Minimalkan setup setelah
-                    # beban antarlini diseimbangkan.
-                    round(
-                        setup_minutes,
-                        6,
-                    ),
-
-                    # 10. Residual hanya menjadi tie-break akhir.
-                    # Jangan digunakan untuk memilih lini utama.
+                    # 10. Residual sebagai tie-break akhir.
                     round(
                         residual_minutes,
                         6,
@@ -2847,6 +2844,8 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     str(job["SKU"]),
                     int(job["Lot Number"]),
                 )
+
+                
                
                 candidates.append({
                     "key": candidate_key,
@@ -4230,8 +4229,8 @@ def run_des_simulation(
                     "Maximum Delay Days"
                 ]
             ),
-            total_weekly_hours,
             highest_utilization,
+            total_weekly_hours,
             str(result["Scenario"]),
         )
 
@@ -4278,10 +4277,10 @@ def run_des_simulation(
                     "On-Time Demand Fulfillment (%)",
                     "SKU-Period On Time (%)",
                     "Ending Backlog Ton",
-                    "Late Demand Ton",
+                    "Late Demand Ton"
                     "Maximum Delay Days",
-                    "Total Weekly Operating Hours",
                     "Highest Utilization (%)",
+                    "Total Weekly Operating Hours",
                     "Scenario",
                 ],
                 ascending=[
