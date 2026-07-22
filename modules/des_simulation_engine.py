@@ -2291,229 +2291,1015 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         evaluation_start_date=evaluation_start_date,
     )
 
+    # ==================================================
+    # DETERMINISTIC MULTICRITERIA SCHEDULER
+    # ==================================================
+    operating_intervals_by_line = (
+        build_operating_intervals(
+            calendar_dates=calendar_dates,
+            daily_capacity_minutes=(
+                daily_capacity_minutes
+            ),
+        )
+    )
+
     pending_jobs = jobs_df.to_dict(
         "records"
     )
 
-    ready_jobs = []
-    pending_position = 0
+    line_rank = {
+        "B": 0,
+        "G": 1,
+        "D": 2,
+    }
+
+    simulation_start_datetime = (
+        pd.Timestamp(
+            simulation_start
+        ).normalize()
+        + pd.Timedelta(
+            hours=SHIFT_START_HOUR
+        )
+    )
+
+    line_cursor = {
+        line: simulation_start_datetime
+        for line in ["B", "G", "D"]
+    }
 
     line_state = {
         line: {
-            "used_today": 0,
-            "processing": 0,
-            "setup": 0,
-            "tons": 0,
-            "evaluation_processing": 0,
-            "evaluation_setup": 0,
-            "evaluation_tons": 0,
+            "processing": 0.0,
+            "setup": 0.0,
+            "regular_busy": 0.0,
+            "overtime": 0.0,
+            "tons": 0.0,
+
+            "evaluation_processing": 0.0,
+            "evaluation_setup": 0.0,
+            "evaluation_regular_busy": 0.0,
+            "evaluation_overtime": 0.0,
+            "evaluation_tons": 0.0,
+
             "last_sku": None,
             "last_port": None,
-            "last_allergen": 0,
+            "last_allergen": 0.0,
             "last_color": None,
         }
         for line in ["B", "G", "D"]
     }
+
     planned_jobs = []
     seq = 1
 
-    for calendar_day, calendar_date in enumerate(
-        calendar_dates,
-        start=1,
-    ):
-        calendar_date = pd.Timestamp(
-            calendar_date
-        ).normalize()
-        # OPTIMIZATION: precompute active lines untuk hari ini (O(1) set lookup × 3)
-        active_lines = [
-            line
-            for line in ["B", "G", "D"]
-            if calendar_date in working_days_by_line[line]
-        ]
+    evaluation_batch_count = {}
 
-        for line in active_lines:
-            line_state[line]["used_today"] = 0
+    def get_compatible_lines(job):
+        compatible = []
 
-        new_jobs_added = False
+        sku_gram = float(
+            job["SKU Gram"]
+        )
 
-        while (
-            pending_position
-            < len(pending_jobs)
-            and pd.Timestamp(
-                pending_jobs[
-                    pending_position
-                ]["Release Date"]
-            ).normalize()
-            <= calendar_date
+        speed_bg = float(
+            job["Speed BG"]
+        )
+
+        speed_d = float(
+            job["Speed D"]
+        )
+
+        if (
+            sku_gram > 0
+            and speed_bg > 0
         ):
-            ready_jobs.append(
-                pending_jobs[
-                    pending_position
-                ]
+            compatible.extend([
+                "B",
+                "G",
+            ])
+
+        if (
+            sku_gram > 0
+            and speed_d > 0
+        ):
+            compatible.append("D")
+
+        return compatible
+
+    def get_release_datetime(job):
+        return (
+            pd.Timestamp(
+                job["Release Date"]
+            ).normalize()
+            + pd.Timedelta(
+                hours=SHIFT_START_HOUR
+            )
+        )
+
+    def get_shelf_window_days(job):
+        return max(
+            (
+                pd.Timestamp(
+                    job["Due Date"]
+                ).normalize()
+                - pd.Timestamp(
+                    job["Release Date"]
+                ).normalize()
+            ).days,
+            0,
+        )
+
+    def get_rough_fill_minutes(job):
+        possible_minutes = []
+
+        sku_gram = float(
+            job["SKU Gram"]
+        )
+
+        batch_ton = float(
+            job["Batch Ton"]
+        )
+
+        speed_bg = float(
+            job["Speed BG"]
+        )
+
+        speed_d = float(
+            job["Speed D"]
+        )
+
+        if (
+            sku_gram > 0
+            and speed_bg > 0
+        ):
+            possible_minutes.append(
+                batch_ton
+                * 1_000_000
+                / sku_gram
+                / speed_bg
             )
 
-            pending_position += 1
-            new_jobs_added = True
+        if (
+            sku_gram > 0
+            and speed_d > 0
+        ):
+            possible_minutes.append(
+                batch_ton
+                * 1_000_000
+                / sku_gram
+                / speed_d
+            )
 
-        if new_jobs_added:
-            ready_jobs.sort(
-                key=lambda job: (
-                    pd.Timestamp(
-                        job["Due Date"]
-                    ),
-                    str(job["SKU"]),
-                    int(job["Lot Number"]),
+        if not possible_minutes:
+            return float("inf")
+
+        return min(possible_minutes)
+
+    def describe_transition(
+        previous_state,
+        job,
+    ):
+        first_job = (
+            previous_state[
+                "last_sku"
+            ]
+            is None
+        )
+
+        if first_job:
+            return {
+                "allergen_up": False,
+                "color_change": False,
+                "port_change": False,
+                "rule": "FIRST_JOB_NO_SETUP",
+            }
+
+        allergen_up = (
+            float(job["Allergen"])
+            > float(
+                previous_state[
+                    "last_allergen"
+                ]
+            )
+        )
+
+        color_change = (
+            job["Color Setup"]
+            != previous_state[
+                "last_color"
+            ]
+        )
+
+        port_change = (
+            job["Port Type"]
+            != previous_state[
+                "last_port"
+            ]
+        )
+
+        if not (
+            allergen_up
+            or color_change
+        ):
+            rule = "NO_SETUP"
+
+        elif port_change:
+            rule = (
+                "SETUP_40_PORT_BERUBAH"
+            )
+
+        else:
+            rule = (
+                "SETUP_60_PORT_SAMA"
+            )
+
+        return {
+            "allergen_up": allergen_up,
+            "color_change": color_change,
+            "port_change": port_change,
+            "rule": rule,
+        }
+
+    def evaluate_candidates(
+        indexed_jobs,
+    ):
+        candidates = []
+
+        for pending_index, job in indexed_jobs:
+            compatible_lines = (
+                get_compatible_lines(job)
+            )
+
+            compatibility_count = len(
+                compatible_lines
+            )
+
+            if compatibility_count == 0:
+                continue
+
+            due_date = pd.Timestamp(
+                job["Due Date"]
+            ).normalize()
+
+            shelf_window_days = (
+                get_shelf_window_days(
+                    job
                 )
             )
 
-        # OPTIMIZATION: skip hari tidak aktif; break jika semua demand terjadwal
-        if not active_lines:
-            continue
-        if (
-            not ready_jobs
-            and pending_position
-            >= len(pending_jobs)
-        ):
-            break
-
-        if not ready_jobs:
-            continue
-
-        count_batch_today = 0
-        while ready_jobs:
-            best_idx = (
-                best_line
-            ) = best_finish = best_setup = best_tfill = best_speed = None
-            
-            for idx, job in enumerate(
-                ready_jobs
-            ):
-                job_role = str(
-                    job.get(
-                        "Data Role",
-                        "evaluation",
-                    )
-                ).strip().lower()
-
-                if (
-                    job_role == "evaluation"
-                    and batch_limit_per_day < 999999
-                    and count_batch_today
-                    >= batch_limit_per_day
-                ):
-                    continue
-
-                candidates = []
-
-                for line in active_lines:
-                    cap_mins = float(
-                        daily_capacity_minutes[line].get(
-                            calendar_date,
-                            0.0,
-                        )
-                    )
-                    speed = job["Speed D"] if line == "D" else job["Speed BG"]
-                    if speed > 0 and job["SKU Gram"] > 0:
-                        tfill = job["Batch Ton"] * 1_000_000 / job["SKU Gram"] / speed
-                        setup = calc_setup(line_state[line], job)
-                        finish = line_state[line]["used_today"] + setup + tfill
-                        if finish <= cap_mins:
-                            candidates.append((line, finish, setup, tfill, speed))
-                if candidates:
-                    chosen = min(candidates, key=lambda x: x[1])  # OPTIMIZATION: min() bukan sorted()[0]
-                    best_idx, best_line, best_finish, best_setup, best_tfill, best_speed = idx, chosen[0], chosen[1], chosen[2], chosen[3], chosen[4]
-                    break
-            if best_idx is None:
-                break
-            job = ready_jobs.pop(best_idx)
-            tblend = T_BLEND_COKLAT if str(job["Chocolate Type"]).lower() == "coklat" else T_BLEND_NON_COKLAT
-            line_state[best_line]["used_today"] = best_finish
-            line_state[best_line]["processing"] += best_tfill
-            line_state[best_line]["setup"] += best_setup
-            line_state[best_line]["tons"] += job["Batch Ton"]
-
-            scheduled_role = str(
+            job_role = str(
                 job.get(
                     "Data Role",
                     "evaluation",
                 )
             ).strip().lower()
 
-            if scheduled_role == "evaluation":
-                line_state[best_line][
-                    "evaluation_processing"
-                ] += best_tfill
-
-                line_state[best_line][
-                    "evaluation_setup"
-                ] += best_setup
-
-                line_state[best_line][
-                    "evaluation_tons"
-                ] += job["Batch Ton"]
-
-            line_state[best_line]["last_sku"] = job["SKU"]
-            line_state[best_line]["last_port"] = job["Port Type"]
-            line_state[best_line]["last_allergen"] = job["Allergen"]
-            line_state[best_line]["last_color"] = job["Color Setup"]
-            planned_jobs.append({
-                "Scenario": scenario_code, "Sequence": seq, "Calendar Day": calendar_day, "Calendar Date": calendar_date.strftime("%Y-%m-%d"), "Line": best_line,
-                "Item Name": job["Item Name"],
-                "SKU": job["SKU"],
-                "SKU Alias": job.get(
-                    "SKU Alias",
-                    "",
-                ),
-                "Data Role": job.get(
-                    "Data Role",
-                    "evaluation",
-                ),
-                "Batch Ton": round(
-                    float(job["Batch Ton"]),
-                    9,
-                ),
-                "Setup Minute": round(best_setup, 2), "Batching Note Minute": T_BATCH, "Prep Note Minute": T_PREP,
-                "Tip Note Minute": T_TIP, "Mini Blend Note Minute": job["Mini Blend Minute"], "Blend Note Minute": tblend,
-                "Fill Minute": round(best_tfill, 2), "Used Capacity Minute": round(best_setup + best_tfill, 2),
-                "Speed": best_speed, "Port Type": job["Port Type"], "Allergen": job["Allergen"], "Color Setup": job["Color Setup"],
-                "Shelf Life": job["Shelf Life"], "Month Index": job["Month Index"], "Month Input Raw": job.get("Month Input Raw", ""),
-                "Month Input Mode": job.get("Month Input Mode", "sequence"), "Month Due Date": job.get("Month Due Date", ""), "Month Due Day": job.get("Month Due Day", np.nan),
-                "Release Date": (
-                    pd.Timestamp(
-                        job["Release Date"]
+            for line in compatible_lines:
+                projection = (
+                    project_job_on_line(
+                        line=line,
+                        job=job,
+                        line_cursor=(
+                            line_cursor[line]
+                        ),
+                        line_state=(
+                            line_state[line]
+                        ),
+                        operating_intervals=(
+                            operating_intervals_by_line[
+                                line
+                            ]
+                        ),
                     )
-                    .strftime("%Y-%m-%d")
-                ),
+                )
 
-                "Due Date": (
-                    pd.Timestamp(
-                        job["Due Date"]
-                    )
-                    .strftime("%Y-%m-%d")
-                ),
+                if projection is None:
+                    continue
 
-                "Capacity Release Date": (
+                production_start_date = (
                     pd.Timestamp(
-                        job[
-                            "Capacity Release Date"
+                        projection[
+                            "start_datetime"
                         ]
-                    )
-                    .strftime("%Y-%m-%d")
-                ),
+                    ).normalize()
+                )
 
-                "Earliest Shelf Date": (
+                if (
+                    job_role == "evaluation"
+                    and batch_limit_per_day
+                    < 999999
+                    and evaluation_batch_count.get(
+                        production_start_date,
+                        0,
+                    )
+                    >= batch_limit_per_day
+                ):
+                    continue
+
+                overtime_minutes = float(
+                    projection[
+                        "overtime_minutes"
+                    ]
+                )
+
+                late_minutes = float(
+                    projection[
+                        "late_minutes"
+                    ]
+                )
+
+                setup_minutes = float(
+                    projection[
+                        "setup_minutes"
+                    ]
+                )
+
+                residual_minutes = float(
+                    projection[
+                        "residual_regular_minutes"
+                    ]
+                )
+
+                candidate_key = (
+                    # Jangan menyisakan kapasitas lebih awal
                     pd.Timestamp(
-                        job[
-                            "Earliest Shelf Date"
+                        projection[
+                            "start_datetime"
                         ]
-                    )
-                    .strftime("%Y-%m-%d")
-                ),
-            })
-            seq += 1
+                    ),
 
-            if scheduled_role == "evaluation":
-                count_batch_today += 1
+                    # Hindari keterlambatan
+                    1
+                    if late_minutes
+                    > LOT_ROUNDING_EPSILON
+                    else 0,
+
+                    round(
+                        late_minutes,
+                        6,
+                    ),
+
+                    # Earliest due date
+                    due_date,
+
+                    # Hindari overtime bila masih mungkin
+                    1
+                    if overtime_minutes
+                    > LOT_ROUNDING_EPSILON
+                    else 0,
+
+                    round(
+                        overtime_minutes,
+                        6,
+                    ),
+
+                    # Job dengan pilihan lini lebih
+                    # sedikit dilindungi lebih dahulu
+                    compatibility_count,
+
+                    # Jendela shelf life lebih sempit
+                    # diprioritaskan
+                    shelf_window_days,
+
+                    # Setup:
+                    # 0 lalu 40 lalu 60 menit
+                    round(
+                        setup_minutes,
+                        6,
+                    ),
+
+                    # Best-fit sisa waktu reguler
+                    round(
+                        residual_minutes,
+                        6,
+                    ),
+
+                    # Selesai paling cepat
+                    pd.Timestamp(
+                        projection[
+                            "finish_datetime"
+                        ]
+                    ),
+
+                    # Tie-break deterministik
+                    line_rank[line],
+                    str(job["SKU"]),
+                    int(job["Lot Number"]),
+                )
+
+                candidates.append({
+                    "key": candidate_key,
+                    "pending_index": (
+                        pending_index
+                    ),
+                    "job": job,
+                    "line": line,
+                    "projection": projection,
+                    "compatibility_count": (
+                        compatibility_count
+                    ),
+                    "shelf_window_days": (
+                        shelf_window_days
+                    ),
+                })
+
+        return candidates
+
+    while pending_jobs:
+        # Cari waktu operasi terdekat dari ketiga lini.
+        next_line_positions = []
+
+        for line in ["B", "G", "D"]:
+            position = (
+                find_next_operating_position(
+                    operating_intervals_by_line[
+                        line
+                    ],
+                    line_cursor[line],
+                )
+            )
+
+            if position is not None:
+                next_line_positions.append(
+                    pd.Timestamp(
+                        position["start"]
+                    )
+                )
+
+        if not next_line_positions:
+            break
+
+        decision_time = min(
+            next_line_positions
+        )
+
+        # Job yang secara shelf life sudah boleh
+        # diproduksi pada waktu keputusan.
+        indexed_ready_jobs = [
+            (
+                pending_index,
+                job,
+            )
+            for pending_index, job
+            in enumerate(pending_jobs)
+            if (
+                get_release_datetime(job)
+                <= decision_time
+            )
+        ]
+
+        # Bila belum ada job yang dirilis,
+        # maju ke release terdekat.
+        if not indexed_ready_jobs:
+            next_release = min(
+                get_release_datetime(job)
+                for job in pending_jobs
+            )
+
+            indexed_ready_jobs = [
+                (
+                    pending_index,
+                    job,
+                )
+                for pending_index, job
+                in enumerate(pending_jobs)
+                if (
+                    get_release_datetime(job)
+                    == next_release
+                )
+            ]
+
+        earliest_due_date = min(
+            pd.Timestamp(
+                job["Due Date"]
+            ).normalize()
+            for _, job
+            in indexed_ready_jobs
+        )
+
+        # Seluruh job dengan due date terdekat
+        # selalu masuk kandidat.
+        urgent_jobs = [
+            (
+                pending_index,
+                job,
+            )
+            for pending_index, job
+            in indexed_ready_jobs
+            if (
+                pd.Timestamp(
+                    job["Due Date"]
+                ).normalize()
+                == earliest_due_date
+            )
+        ]
+
+        # Job periode berikutnya dipilih secara
+        # deterministik untuk mencari best-fit
+        # terhadap sisa jam kerja.
+        later_jobs = [
+            (
+                pending_index,
+                job,
+            )
+            for pending_index, job
+            in indexed_ready_jobs
+            if (
+                pd.Timestamp(
+                    job["Due Date"]
+                ).normalize()
+                > earliest_due_date
+            )
+        ]
+
+        later_jobs.sort(
+            key=lambda indexed_job: (
+                len(
+                    get_compatible_lines(
+                        indexed_job[1]
+                    )
+                ),
+                get_shelf_window_days(
+                    indexed_job[1]
+                ),
+                get_rough_fill_minutes(
+                    indexed_job[1]
+                ),
+                pd.Timestamp(
+                    indexed_job[1][
+                        "Due Date"
+                    ]
+                ),
+                str(
+                    indexed_job[1][
+                        "SKU"
+                    ]
+                ),
+                int(
+                    indexed_job[1][
+                        "Lot Number"
+                    ]
+                ),
+            )
+        )
+
+        additional_candidate_count = max(
+            int(
+                candidate_window
+                or 0
+            ),
+            0,
+        )
+
+        candidate_pool = (
+            urgent_jobs
+            + later_jobs[
+                :additional_candidate_count
+            ]
+        )
+
+        candidates = (
+            evaluate_candidates(
+                candidate_pool
+            )
+        )
+
+        # Fallback: bila pool ringkas belum
+        # menghasilkan keputusan, periksa seluruh
+        # job yang sudah dirilis.
+        if (
+            not candidates
+            and len(candidate_pool)
+            < len(indexed_ready_jobs)
+        ):
+            candidates = (
+                evaluate_candidates(
+                    indexed_ready_jobs
+                )
+            )
+
+        if not candidates:
+            # Umumnya terjadi ketika batas batch
+            # harian telah penuh.
+            if (
+                batch_limit_per_day
+                < 999999
+            ):
+                next_shift_start = (
+                    decision_time.normalize()
+                    + pd.Timedelta(days=1)
+                    + pd.Timedelta(
+                        hours=(
+                            SHIFT_START_HOUR
+                        )
+                    )
+                )
+
+                for line in [
+                    "B",
+                    "G",
+                    "D",
+                ]:
+                    if (
+                        line_cursor[line]
+                        <= decision_time
+                    ):
+                        line_cursor[line] = (
+                            next_shift_start
+                        )
+
+                continue
+
+            break
+
+        chosen = min(
+            candidates,
+            key=lambda candidate: (
+                candidate["key"]
+            ),
+        )
+
+        pending_index = (
+            chosen["pending_index"]
+        )
+
+        job = pending_jobs.pop(
+            pending_index
+        )
+
+        best_line = chosen["line"]
+
+        projection = chosen[
+            "projection"
+        ]
+
+        transition = (
+            describe_transition(
+                line_state[best_line],
+                job,
+            )
+        )
+
+        best_setup = float(
+            projection[
+                "setup_minutes"
+            ]
+        )
+
+        best_tfill = float(
+            projection[
+                "fill_minutes"
+            ]
+        )
+
+        best_speed = float(
+            projection["speed"]
+        )
+
+        overtime_minutes = float(
+            projection[
+                "overtime_minutes"
+            ]
+        )
+
+        regular_used_minutes = float(
+            projection[
+                "regular_used_minutes"
+            ]
+        )
+
+        line_cursor[best_line] = (
+            pd.Timestamp(
+                projection[
+                    "finish_datetime"
+                ]
+            )
+        )
+
+        line_state[best_line][
+            "processing"
+        ] += best_tfill
+
+        line_state[best_line][
+            "setup"
+        ] += best_setup
+
+        line_state[best_line][
+            "regular_busy"
+        ] += regular_used_minutes
+
+        line_state[best_line][
+            "overtime"
+        ] += overtime_minutes
+
+        line_state[best_line][
+            "tons"
+        ] += float(
+            job["Batch Ton"]
+        )
+
+        scheduled_role = str(
+            job.get(
+                "Data Role",
+                "evaluation",
+            )
+        ).strip().lower()
+
+        if scheduled_role == "evaluation":
+            line_state[best_line][
+                "evaluation_processing"
+            ] += best_tfill
+
+            line_state[best_line][
+                "evaluation_setup"
+            ] += best_setup
+
+            line_state[best_line][
+                "evaluation_regular_busy"
+            ] += regular_used_minutes
+
+            line_state[best_line][
+                "evaluation_overtime"
+            ] += overtime_minutes
+
+            line_state[best_line][
+                "evaluation_tons"
+            ] += float(
+                job["Batch Ton"]
+            )
+
+            production_start_date = (
+                pd.Timestamp(
+                    projection[
+                        "start_datetime"
+                    ]
+                ).normalize()
+            )
+
+            evaluation_batch_count[
+                production_start_date
+            ] = (
+                evaluation_batch_count.get(
+                    production_start_date,
+                    0,
+                )
+                + 1
+            )
+
+        line_state[best_line][
+            "last_sku"
+        ] = job["SKU"]
+
+        line_state[best_line][
+            "last_port"
+        ] = job["Port Type"]
+
+        line_state[best_line][
+            "last_allergen"
+        ] = job["Allergen"]
+
+        line_state[best_line][
+            "last_color"
+        ] = job["Color Setup"]
+
+        completion_date = (
+            pd.Timestamp(
+                projection[
+                    "finish_datetime"
+                ]
+            ).normalize()
+        )
+
+        calendar_day = (
+            completion_date
+            - pd.Timestamp(
+                simulation_start
+            ).normalize()
+        ).days + 1
+
+        tblend = (
+            T_BLEND_COKLAT
+            if str(
+                job["Chocolate Type"]
+            ).lower()
+            == "coklat"
+            else T_BLEND_NON_COKLAT
+        )
+
+        planned_jobs.append({
+            "Scenario": scenario_code,
+            "Sequence": seq,
+
+            # Ledger memakai tanggal selesai.
+            "Calendar Day": (
+                calendar_day
+            ),
+            "Calendar Date": (
+                completion_date.strftime(
+                    "%Y-%m-%d"
+                )
+            ),
+
+            "Start Datetime": (
+                pd.Timestamp(
+                    projection[
+                        "start_datetime"
+                    ]
+                ).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            ),
+            "Completion Datetime": (
+                pd.Timestamp(
+                    projection[
+                        "finish_datetime"
+                    ]
+                ).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            ),
+
+            "Line": best_line,
+            "Item Name": job["Item Name"],
+            "SKU": job["SKU"],
+            "SKU Alias": job.get(
+                "SKU Alias",
+                "",
+            ),
+            "Data Role": job.get(
+                "Data Role",
+                "evaluation",
+            ),
+
+            "Batch Ton": round(
+                float(
+                    job["Batch Ton"]
+                ),
+                9,
+            ),
+
+            "Setup Minute": round(
+                best_setup,
+                2,
+            ),
+            "Fill Minute": round(
+                best_tfill,
+                2,
+            ),
+            "Used Capacity Minute": round(
+                best_setup
+                + best_tfill,
+                2,
+            ),
+            "Regular Used Minute": round(
+                regular_used_minutes,
+                2,
+            ),
+            "Overtime Minute": round(
+                overtime_minutes,
+                2,
+            ),
+            "Residual Regular Minute": round(
+                float(
+                    projection[
+                        "residual_regular_minutes"
+                    ]
+                ),
+                2,
+            ),
+            "Idle Wait Minute": round(
+                float(
+                    projection[
+                        "idle_wait_minutes"
+                    ]
+                ),
+                2,
+            ),
+            "Scheduling Mode": (
+                projection[
+                    "scheduling_mode"
+                ]
+            ),
+
+            "Line Compatibility Count": (
+                chosen[
+                    "compatibility_count"
+                ]
+            ),
+            "Shelf Window Days": (
+                chosen[
+                    "shelf_window_days"
+                ]
+            ),
+
+            "Allergen Increase": (
+                transition[
+                    "allergen_up"
+                ]
+            ),
+            "Color Change": (
+                transition[
+                    "color_change"
+                ]
+            ),
+            "Port Change": (
+                transition[
+                    "port_change"
+                ]
+            ),
+            "Setup Rule": (
+                transition["rule"]
+            ),
+
+            "Batching Note Minute": (
+                T_BATCH
+            ),
+            "Prep Note Minute": (
+                T_PREP
+            ),
+            "Tip Note Minute": (
+                T_TIP
+            ),
+            "Mini Blend Note Minute": (
+                job[
+                    "Mini Blend Minute"
+                ]
+            ),
+            "Blend Note Minute": tblend,
+
+            "Speed": best_speed,
+            "Port Type": (
+                job["Port Type"]
+            ),
+            "Allergen": (
+                job["Allergen"]
+            ),
+            "Color Setup": (
+                job["Color Setup"]
+            ),
+            "Shelf Life": (
+                job["Shelf Life"]
+            ),
+            "Month Index": (
+                job["Month Index"]
+            ),
+            "Month Input Raw": job.get(
+                "Month Input Raw",
+                "",
+            ),
+            "Month Input Mode": job.get(
+                "Month Input Mode",
+                "sequence",
+            ),
+            "Month Due Date": job.get(
+                "Month Due Date",
+                "",
+            ),
+            "Month Due Day": job.get(
+                "Month Due Day",
+                np.nan,
+            ),
+
+            "Release Date": (
+                pd.Timestamp(
+                    job["Release Date"]
+                ).strftime(
+                    "%Y-%m-%d"
+                )
+            ),
+            "Due Date": (
+                pd.Timestamp(
+                    job["Due Date"]
+                ).strftime(
+                    "%Y-%m-%d"
+                )
+            ),
+            "Capacity Release Date": (
+                pd.Timestamp(
+                    job[
+                        "Capacity Release Date"
+                    ]
+                ).strftime(
+                    "%Y-%m-%d"
+                )
+            ),
+            "Earliest Shelf Date": (
+                pd.Timestamp(
+                    job[
+                        "Earliest Shelf Date"
+                    ]
+                ).strftime(
+                    "%Y-%m-%d"
+                )
+            ),
+        })
+
+        seq += 1
+
+    planned_jobs_df = pd.DataFrame(
+        planned_jobs
+    )
+    
     planned_jobs_df = pd.DataFrame(
         planned_jobs
     )
@@ -2740,10 +3526,9 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     }
 
     util_b = (
-        (
-            line_state["B"]["evaluation_processing"]
-            + line_state["B"]["evaluation_setup"]
-        )
+        line_state["B"][
+            "evaluation_regular_busy"
+        ]
         / evaluation_available["B"]
         * 100
         if evaluation_available["B"] > 0
@@ -2751,10 +3536,9 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     )
 
     util_g = (
-        (
-            line_state["G"]["evaluation_processing"]
-            + line_state["G"]["evaluation_setup"]
-        )
+        line_state["G"][
+            "evaluation_regular_busy"
+        ]
         / evaluation_available["G"]
         * 100
         if evaluation_available["G"] > 0
@@ -2762,15 +3546,14 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
     )
 
     util_d = (
-        (
-            line_state["D"]["evaluation_processing"]
-            + line_state["D"]["evaluation_setup"]
-        )
+        line_state["D"][
+            "evaluation_regular_busy"
+        ]
         / evaluation_available["D"]
         * 100
         if evaluation_available["D"] > 0
         else 0
-    )
+    )    
     util_dict = {"Filling B": util_b, "Filling G": util_g, "Filling D": util_d}
     bottleneck = max(util_dict, key=util_dict.get)
     return {
@@ -2919,6 +3702,41 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             line_state["D"]["evaluation_setup"],
             2,
         ),
+
+        "Line B Overtime Minute": round(
+            line_state["B"][
+                "evaluation_overtime"
+            ],
+            2,
+        ),
+
+        "Line G Overtime Minute": round(
+            line_state["G"][
+                "evaluation_overtime"
+            ],
+            2,
+        ),
+
+        "Line D Overtime Minute": round(
+            line_state["D"][
+                "evaluation_overtime"
+            ],
+            2,
+        ),
+
+        "Total Overtime Minute": round(
+            line_state["B"][
+                "evaluation_overtime"
+            ]
+            + line_state["G"][
+                "evaluation_overtime"
+            ]
+            + line_state["D"][
+                "evaluation_overtime"
+            ],
+            2,
+        ),
+        
         "Bottleneck Area": bottleneck,
         "Planner Status": "Target Terpenuhi" if finished_ton >= target_demand - 0.05 else "Target Tidak Terpenuhi",
         "Capacity Status": "Kapasitas Mencukupi" if unmet_demand <= 0.05 else "Kapasitas Tidak Mencukupi",
