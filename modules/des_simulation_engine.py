@@ -2659,6 +2659,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
     def evaluate_candidates(
         indexed_jobs,
+        eligible_lines,
     ):
         candidates = []
 
@@ -2692,6 +2693,11 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             ).strip().lower()
 
             for line in compatible_lines:
+                # Hanya lini yang sedang kosong
+                # yang boleh menerima pekerjaan.
+                if line not in eligible_lines:
+                    continue
+
                 projection = (
                     project_job_on_line(
                         line=line,
@@ -2916,8 +2922,9 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         if not active_group_items:
             break
 
-        # Cari waktu operasi terdekat dari ketiga lini.    
-        next_line_positions = []
+        # Cari waktu ketika setiap lini dapat
+        # menerima pekerjaan berikutnya.
+        next_line_positions = {}
 
         for line in ["B", "G", "D"]:
             position = (
@@ -2939,21 +2946,25 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             )
 
             if position is not None:
-                next_line_positions.append(
-                    pd.Timestamp(
-                        position["start"]
-                    )
+                next_line_positions[line] = (
+                    position
                 )
 
         if not next_line_positions:
             break
 
+        # Waktu kejadian adalah waktu paling awal
+        # ketika minimal satu lini sedang kosong.
         decision_time = min(
-            next_line_positions
+            pd.Timestamp(
+                position["start"]
+            )
+            for position
+            in next_line_positions.values()
         )
 
-        # Job yang secara shelf life sudah boleh
-        # diproduksi pada waktu keputusan.
+        # Ambil pekerjaan yang sudah boleh diproduksi
+        # pada waktu kejadian tersebut.
         indexed_ready_jobs = [
             (
                 group_key,
@@ -2967,13 +2978,18 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             )
         ]
 
-        # Bila belum ada job yang dirilis,
-        # maju ke release terdekat.
+        # Bila belum ada pekerjaan yang dirilis,
+        # majukan waktu ke release terdekat.
         if not indexed_ready_jobs:
             next_release = min(
                 get_release_datetime(job)
                 for _, job
                 in active_group_items
+            )
+
+            decision_time = max(
+                decision_time,
+                next_release,
             )
 
             indexed_ready_jobs = [
@@ -2985,9 +3001,27 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 in active_group_items
                 if (
                     get_release_datetime(job)
-                    == next_release
+                    <= decision_time
                 )
-            ] 
+            ]
+
+        # Hanya lini yang sudah kosong pada
+        # decision_time yang boleh dipilih.
+        eligible_lines = {
+            line
+            for line, position
+            in next_line_positions.items()
+            if (
+                pd.Timestamp(
+                    position["start"]
+                )
+                <= decision_time
+            )
+        }
+
+        if not eligible_lines:
+            break
+            
         earliest_due_date = min(
             pd.Timestamp(
                 job["Due Date"]
@@ -3079,7 +3113,8 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
         candidates = (
             evaluate_candidates(
-                candidate_pool
+                candidate_pool,
+                eligible_lines,
             )
         )
 
@@ -3093,7 +3128,8 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         ):
             candidates = (
                 evaluate_candidates(
-                    indexed_ready_jobs
+                    indexed_ready_jobs,
+                    eligible_lines,
                 )
             )
 
