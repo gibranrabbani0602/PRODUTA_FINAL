@@ -2772,7 +2772,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 )
 
                 candidate_key = (
-                    # 1. Jangan sampai demand terlambat.
+                    # 1. Hindari dan minimalkan keterlambatan.
                     1
                     if late_minutes
                     > LOT_ROUNDING_EPSILON
@@ -2783,15 +2783,10 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                         6,
                     ),
 
-                    # 2. Gunakan sisa waktu reguler sekarang.
-                    # Job yang aman ditunda ke shift berikutnya
-                    # tidak boleh membuang slot yang masih tersedia.
-                    wait_flag,
-
-                    # 3. Dahulukan due date terdekat.
+                    # 2. Dahulukan due date terdekat.
                     due_date,
 
-                    # 4. Minimalkan lembur.
+                    # 3. Hindari dan minimalkan overtime.
                     1
                     if overtime_minutes
                     > LOT_ROUNDING_EPSILON
@@ -2802,42 +2797,51 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                         6,
                     ),
 
-                    # 5. Lindungi SKU yang pilihan lininya sedikit.
+                    # 4. Lindungi SKU dengan pilihan lini terbatas.
                     compatibility_count,
 
-                    # 6. Lindungi jendela shelf life yang sempit.
+                    # 5. Lindungi shelf window yang lebih sempit.
                     shelf_window_days,
 
-                    # 7. Minimalkan setup: 0, lalu 40, lalu 60.
-                    round(
-                        setup_minutes,
-                        6,
-                    ),
-
-                    # 8. Isi sisa waktu shift seoptimal mungkin.
-                    round(
-                        residual_minutes,
-                        6,
-                    ),
-
-                    # 9. Pilih waktu selesai paling cepat.
+                    # 6. Seimbangkan lini berdasarkan
+                    # waktu selesai yang diproyeksikan.
                     pd.Timestamp(
                         projection[
                             "finish_datetime"
                         ]
                     ),
 
-                    # 10. Tie-break deterministik.
+                    # 7. Bila waktu selesai sama,
+                    # pilih yang dapat mulai lebih awal.
                     pd.Timestamp(
                         projection[
                             "start_datetime"
                         ]
                     ),
+
+                    # 8. Hindari menunggu bila hasilnya setara.
+                    wait_flag,
+
+                    # 9. Minimalkan setup setelah
+                    # beban antarlini diseimbangkan.
+                    round(
+                        setup_minutes,
+                        6,
+                    ),
+
+                    # 10. Residual hanya menjadi tie-break akhir.
+                    # Jangan digunakan untuk memilih lini utama.
+                    round(
+                        residual_minutes,
+                        6,
+                    ),
+
+                    # Tie-break deterministik.
                     line_rank[line],
                     str(job["SKU"]),
                     int(job["Lot Number"]),
                 )
-
+               
                 candidates.append({
                     "key": candidate_key,
                     "pending_index": (
