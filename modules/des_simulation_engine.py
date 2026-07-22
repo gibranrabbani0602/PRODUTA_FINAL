@@ -4013,16 +4013,97 @@ def run_des_simulation(
     # untuk keterbatasan RAM Streamlit Cloud.
     results = []
 
+    # Hanya menyimpan Production Plan terbaik sementara.
+    # Jadi tidak perlu menjalankan skenario terbaik dua kali.
+    best_planned_jobs_df = pd.DataFrame()
+    best_rank_key = None
+
     for scenario in scenario_list:
-        result, _ = simulate_one_scenario(
-            forecast_df,
-            pd.Series(scenario),
-            holiday_set,
-            DEFAULT_CANDIDATE_WINDOW,
+        result, scenario_planned_jobs_df = (
+            simulate_one_scenario(
+                forecast_df,
+                pd.Series(scenario),
+                holiday_set,
+                DEFAULT_CANDIDATE_WINDOW,
+            )
         )
 
-        if result:
-            results.append(result)
+        if not result:
+            continue
+
+        results.append(result)
+
+        highest_utilization = max(
+            float(
+                result[
+                    "Util Filling B (%)"
+                ]
+            ),
+            float(
+                result[
+                    "Util Filling G (%)"
+                ]
+            ),
+            float(
+                result[
+                    "Util Filling D (%)"
+                ]
+            ),
+        )
+
+        total_weekly_hours = (
+            float(result["Line B Days"])
+            * float(result["Line B Hours"])
+            + float(result["Line G Days"])
+            * float(result["Line G Hours"])
+            + float(result["Line D Days"])
+            * float(result["Line D Hours"])
+        )
+
+        # Urutan ini sama dengan urutan hasil akhir.
+        current_rank_key = (
+            -float(
+                result[
+                    "On-Time Demand Fulfillment (%)"
+                ]
+            ),
+            -float(
+                result[
+                    "SKU-Period On Time (%)"
+                ]
+            ),
+            float(
+                result[
+                    "Ending Backlog Ton"
+                ]
+            ),
+            float(
+                result[
+                    "Late Demand Ton"
+                ]
+            ),
+            int(
+                result[
+                    "Maximum Delay Days"
+                ]
+            ),
+            total_weekly_hours,
+            highest_utilization,
+            str(result["Scenario"]),
+        )
+
+        if (
+            best_rank_key is None
+            or current_rank_key
+            < best_rank_key
+        ):
+            best_rank_key = (
+                current_rank_key
+            )
+
+            best_planned_jobs_df = (
+                scenario_planned_jobs_df
+            )
 
     result_df = pd.DataFrame(results)
 
@@ -4077,24 +4158,9 @@ def run_des_simulation(
 
         # Detail Production Plan hanya dibuat ulang
         # untuk skenario terbaik agar RAM tidak penuh.
-        best_scenario_code = str(
-            result_df.iloc[0]["Scenario"]
+        planned_jobs_df = (
+            best_planned_jobs_df
         )
-
-        best_scenario = next(
-            scenario
-            for scenario in scenario_list
-            if str(scenario["Scenario"])
-            == best_scenario_code
-        )
-
-        _, planned_jobs_df = simulate_one_scenario(
-            forecast_df,
-            pd.Series(best_scenario),
-            holiday_set,
-            DEFAULT_CANDIDATE_WINDOW,
-        )
-
     else:
         planned_jobs_df = pd.DataFrame()
     sku_count = (
