@@ -1,4 +1,5 @@
 import itertools
+from collections import deque
 import os
 import re
 import tempfile
@@ -2303,9 +2304,44 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         )
     )
 
-    pending_jobs = jobs_df.to_dict(
+    # Lot-lot identik dikelompokkan agar heuristik
+    # tidak menghitung kandidat yang sama ribuan kali.
+    job_groups = {}
+
+    for job in jobs_df.to_dict(
         "records"
-    )
+    ):
+        group_key = (
+            str(job["SKU"]),
+            round(
+                float(job["Batch Ton"]),
+                9,
+            ),
+            pd.Timestamp(
+                job["Release Date"]
+            ),
+            pd.Timestamp(
+                job["Due Date"]
+            ),
+            str(
+                job.get(
+                    "Data Role",
+                    "evaluation",
+                )
+            ).strip().lower(),
+            float(job["Speed BG"]),
+            float(job["Speed D"]),
+            float(job["SKU Gram"]),
+            str(job["Port Type"]),
+            float(job["Allergen"]),
+            str(job["Color Setup"]),
+            float(job["Shelf Life"]),
+        )
+
+        if group_key not in job_groups:
+            job_groups[group_key] = deque()
+
+        job_groups[group_key].append(job)
 
     line_rank = {
         "B": 0,
@@ -2714,7 +2750,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
         return candidates
 
-    while pending_jobs:
+    while job_groups:
         # Cari waktu operasi terdekat dari ketiga lini.
         next_line_positions = []
 
@@ -2746,13 +2782,16 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         # diproduksi pada waktu keputusan.
         indexed_ready_jobs = [
             (
-                pending_index,
-                job,
+                group_key,
+                job_queue[0],
             )
-            for pending_index, job
-            in enumerate(pending_jobs)
+            for group_key, job_queue
+            in job_groups.items()
             if (
-                get_release_datetime(job)
+                len(job_queue) > 0
+                and get_release_datetime(
+                    job_queue[0]
+                )
                 <= decision_time
             )
         ]
@@ -2761,19 +2800,26 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         # maju ke release terdekat.
         if not indexed_ready_jobs:
             next_release = min(
-                get_release_datetime(job)
-                for job in pending_jobs
+                get_release_datetime(
+                    job_queue[0]
+                )
+                for job_queue
+                in job_groups.values()
+                if len(job_queue) > 0
             )
 
             indexed_ready_jobs = [
                 (
-                    pending_index,
-                    job,
+                    group_key,
+                    job_queue[0],
                 )
-                for pending_index, job
-                in enumerate(pending_jobs)
+                for group_key, job_queue
+                in job_groups.items()
                 if (
-                    get_release_datetime(job)
+                    len(job_queue) > 0
+                    and get_release_datetime(
+                        job_queue[0]
+                    )
                     == next_release
                 )
             ]
@@ -2928,13 +2974,22 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
             ),
         )
 
-        pending_index = (
+        selected_group_key = (
             chosen["pending_index"]
         )
 
-        job = pending_jobs.pop(
-            pending_index
+        selected_queue = (
+            job_groups[
+                selected_group_key
+            ]
         )
+
+        job = selected_queue.popleft()
+
+        if not selected_queue:
+            del job_groups[
+                selected_group_key
+            ]        
 
         best_line = chosen["line"]
 
