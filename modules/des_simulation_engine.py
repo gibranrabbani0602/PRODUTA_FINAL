@@ -1915,7 +1915,8 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 best_line
             ) = best_finish = best_setup = best_tfill = best_speed = None
             for idx, job in enumerate(
-                ready_jobs[:candidate_window]
+            for idx, job in enumerate(
+                ready_jobs
             ):
                 job_role = str(
                     job.get(
