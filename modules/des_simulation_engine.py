@@ -2386,6 +2386,65 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
         job_groups[group_key].append(job)
 
+    # Setiap SKU hanya menampilkan satu kelompok
+    # terdepan kepada scheduler.
+    sku_group_queues = {}
+
+    for group_key, job_queue in (
+        job_groups.items()
+    ):
+        if not job_queue:
+            continue
+
+        sku = str(
+            job_queue[0]["SKU"]
+        )
+
+        if sku not in sku_group_queues:
+            sku_group_queues[sku] = []
+
+        sku_group_queues[sku].append(
+            group_key
+        )
+
+# Kelompok setiap SKU diurutkan:
+# release paling awal, due date paling awal,
+# lalu nomor lot.
+for sku, group_keys in (
+    sku_group_queues.items()
+):
+    group_keys.sort(
+        key=lambda group_key: (
+            pd.Timestamp(
+                job_groups[
+                    group_key
+                ][0]["Release Date"]
+            ),
+            pd.Timestamp(
+                job_groups[
+                    group_key
+                ][0]["Due Date"]
+            ),
+            int(
+                job_groups[
+                    group_key
+                ][0]["Lot Number"]
+            ),
+            round(
+                float(
+                    job_groups[
+                        group_key
+                    ][0]["Batch Ton"]
+                ),
+                9,
+            ),
+        )
+    )
+
+    sku_group_queues[sku] = deque(
+        group_keys
+    )
+
     line_rank = {
         "B": 0,
         "G": 1,
@@ -2797,9 +2856,64 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                 })
 
         return candidates
+        
+    def get_active_group_items():
+        """
+        Mengambil satu kelompok terdepan dari
+        setiap SKU.
 
+        Kelompok bulan berikutnya belum dibandingkan
+        sebelum kelompok sebelumnya selesai.
+        """
+        active_items = []
+        empty_skus = []
+
+        for sku, group_keys in (
+            sku_group_queues.items()
+        ):
+            # Buang group key yang kelompok lotnya
+            # sudah selesai diproduksi.
+            while (
+                group_keys
+                and group_keys[0]
+                not in job_groups
+            ):
+                group_keys.popleft()
+
+            if not group_keys:
+                empty_skus.append(sku)
+                continue
+
+            active_group_key = (
+                group_keys[0]
+            )
+
+            active_job_queue = (
+                job_groups[
+                    active_group_key
+                ]
+            )
+
+            if active_job_queue:
+                active_items.append((
+                    active_group_key,
+                    active_job_queue[0],
+                ))
+
+        for sku in empty_skus:
+            del sku_group_queues[sku]
+
+        return active_items
+    
     while job_groups:
-        # Cari waktu operasi terdekat dari ketiga lini.
+        active_group_items = (
+            get_active_group_items()
+        )
+
+        if not active_group_items:
+            break
+
+        # Cari waktu operasi terdekat dari ketiga lini.    
         next_line_positions = []
 
         for line in ["B", "G", "D"]:
@@ -2840,15 +2954,12 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         indexed_ready_jobs = [
             (
                 group_key,
-                job_queue[0],
+                job,
             )
-            for group_key, job_queue
-            in job_groups.items()
+            for group_key, job
+            in active_group_items
             if (
-                len(job_queue) > 0
-                and get_release_datetime(
-                    job_queue[0]
-                )
+                get_release_datetime(job)
                 <= decision_time
             )
         ]
@@ -2857,30 +2968,23 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
         # maju ke release terdekat.
         if not indexed_ready_jobs:
             next_release = min(
-                get_release_datetime(
-                    job_queue[0]
-                )
-                for job_queue
-                in job_groups.values()
-                if len(job_queue) > 0
+                get_release_datetime(job)
+                for _, job
+                in active_group_items
             )
 
             indexed_ready_jobs = [
                 (
                     group_key,
-                    job_queue[0],
+                    job,
                 )
-                for group_key, job_queue
-                in job_groups.items()
+                for group_key, job
+                in active_group_items
                 if (
-                    len(job_queue) > 0
-                    and get_release_datetime(
-                        job_queue[0]
-                    )
+                    get_release_datetime(job)
                     == next_release
                 )
-            ]
-
+            ] 
         earliest_due_date = min(
             pd.Timestamp(
                 job["Due Date"]
