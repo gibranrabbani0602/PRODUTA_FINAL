@@ -2620,15 +2620,17 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                     ]
                 )
 
-                candidate_key = (
-                    # Jangan menyisakan kapasitas lebih awal
-                    pd.Timestamp(
-                        projection[
-                            "start_datetime"
-                        ]
-                    ),
+                wait_flag = (
+                    1
+                    if projection[
+                        "scheduling_mode"
+                    ]
+                    == "WAIT_NEXT_REGULAR_INTERVAL"
+                    else 0
+                )
 
-                    # Hindari keterlambatan
+                candidate_key = (
+                    # 1. Jangan sampai demand terlambat.
                     1
                     if late_minutes
                     > LOT_ROUNDING_EPSILON
@@ -2639,10 +2641,15 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                         6,
                     ),
 
-                    # Earliest due date
+                    # 2. Gunakan sisa waktu reguler sekarang.
+                    # Job yang aman ditunda ke shift berikutnya
+                    # tidak boleh membuang slot yang masih tersedia.
+                    wait_flag,
+
+                    # 3. Dahulukan due date terdekat.
                     due_date,
 
-                    # Hindari overtime bila masih mungkin
+                    # 4. Minimalkan lembur.
                     1
                     if overtime_minutes
                     > LOT_ROUNDING_EPSILON
@@ -2653,35 +2660,37 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
                         6,
                     ),
 
-                    # Job dengan pilihan lini lebih
-                    # sedikit dilindungi lebih dahulu
+                    # 5. Lindungi SKU yang pilihan lininya sedikit.
                     compatibility_count,
 
-                    # Jendela shelf life lebih sempit
-                    # diprioritaskan
+                    # 6. Lindungi jendela shelf life yang sempit.
                     shelf_window_days,
 
-                    # Setup:
-                    # 0 lalu 40 lalu 60 menit
+                    # 7. Minimalkan setup: 0, lalu 40, lalu 60.
                     round(
                         setup_minutes,
                         6,
                     ),
 
-                    # Best-fit sisa waktu reguler
+                    # 8. Isi sisa waktu shift seoptimal mungkin.
                     round(
                         residual_minutes,
                         6,
                     ),
 
-                    # Selesai paling cepat
+                    # 9. Pilih waktu selesai paling cepat.
                     pd.Timestamp(
                         projection[
                             "finish_datetime"
                         ]
                     ),
 
-                    # Tie-break deterministik
+                    # 10. Tie-break deterministik.
+                    pd.Timestamp(
+                        projection[
+                            "start_datetime"
+                        ]
+                    ),
                     line_rank[line],
                     str(job["SKU"]),
                     int(job["Lot Number"]),
@@ -3296,10 +3305,7 @@ def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_wind
 
         seq += 1
 
-    planned_jobs_df = pd.DataFrame(
-        planned_jobs
-    )
-    
+      
     planned_jobs_df = pd.DataFrame(
         planned_jobs
     )
