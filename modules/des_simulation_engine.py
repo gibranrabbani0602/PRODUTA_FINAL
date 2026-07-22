@@ -33,6 +33,8 @@ SETUP_PORT_SAMA = 60
 
 MIN_REMAINING_SHELF_MONTHS = 3
 
+SHIFT_START_HOUR = 7
+
 SETUP_RESERVE_PER_LOT_MINUTE = max(
     SETUP_PORT_BERUBAH,
     SETUP_PORT_SAMA,
@@ -1667,6 +1669,481 @@ def assign_capacity_release_dates(
         .reset_index(drop=True)
     )
 
+def build_operating_intervals(
+    calendar_dates,
+    daily_capacity_minutes,
+):
+    """
+    Membentuk interval operasi aktual setiap lini.
+
+    Contoh:
+    - Senin 24 jam = Senin 07.00 sampai Selasa 07.00
+    - Selasa 24 jam = Selasa 07.00 sampai Rabu 07.00
+    - Rabu 16 jam = Rabu 07.00 sampai Rabu 23.00
+
+    Interval yang bersambung digabung agar lot dapat terus
+    berjalan melewati pergantian tanggal tanpa setup ulang.
+    """
+    intervals_by_line = {
+        line: []
+        for line in ["B", "G", "D"]
+    }
+
+    for line in ["B", "G", "D"]:
+        raw_intervals = []
+
+        for calendar_date in calendar_dates:
+            calendar_date = pd.Timestamp(
+                calendar_date
+            ).normalize()
+
+            capacity_minutes = float(
+                daily_capacity_minutes[line].get(
+                    calendar_date,
+                    0.0,
+                )
+            )
+
+            if capacity_minutes <= LOT_ROUNDING_EPSILON:
+                continue
+
+            interval_start = (
+                calendar_date
+                + pd.Timedelta(
+                    hours=SHIFT_START_HOUR
+                )
+            )
+
+            interval_end = (
+                interval_start
+                + pd.Timedelta(
+                    minutes=capacity_minutes
+                )
+            )
+
+            raw_intervals.append({
+                "start": interval_start,
+                "end": interval_end,
+                "regular_minutes": (
+                    capacity_minutes
+                ),
+            })
+
+        merged_intervals = []
+
+        for interval in raw_intervals:
+            if not merged_intervals:
+                merged_intervals.append(
+                    interval.copy()
+                )
+                continue
+
+            last_interval = (
+                merged_intervals[-1]
+            )
+
+            # Interval 24 jam yang berakhir pukul 07.00
+            # langsung tersambung dengan interval hari berikutnya
+            # yang juga mulai pukul 07.00.
+            if (
+                interval["start"]
+                <= last_interval["end"]
+            ):
+                last_interval["end"] = max(
+                    last_interval["end"],
+                    interval["end"],
+                )
+
+                last_interval[
+                    "regular_minutes"
+                ] += interval[
+                    "regular_minutes"
+                ]
+
+            else:
+                merged_intervals.append(
+                    interval.copy()
+                )
+
+        intervals_by_line[line] = (
+            merged_intervals
+        )
+
+    return intervals_by_line
+
+
+def find_next_operating_position(
+    operating_intervals,
+    requested_time,
+):
+    """
+    Mencari posisi waktu kerja pertama yang tersedia
+    pada atau setelah requested_time.
+    """
+    requested_time = pd.Timestamp(
+        requested_time
+    )
+
+    for interval_index, interval in enumerate(
+        operating_intervals
+    ):
+        interval_start = pd.Timestamp(
+            interval["start"]
+        )
+
+        interval_end = pd.Timestamp(
+            interval["end"]
+        )
+
+        if requested_time >= interval_end:
+            continue
+
+        actual_start = max(
+            requested_time,
+            interval_start,
+        )
+
+        return {
+            "interval_index": interval_index,
+            "start": actual_start,
+            "interval_start": interval_start,
+            "interval_end": interval_end,
+        }
+
+    return None
+
+
+def project_job_on_line(
+    line,
+    job,
+    line_cursor,
+    line_state,
+    operating_intervals,
+):
+    """
+    Mensimulasikan satu job pada satu lini tanpa langsung
+    mengubah keadaan sistem.
+
+    Aturan:
+    1. Lot tetap pada satu lini.
+    2. Setup dihitung satu kali saat lot mulai.
+    3. Interval 24 jam yang bersambung dapat dilintasi.
+    4. Pada akhir interval 16 jam, lot dapat selesai
+       menggunakan overtime.
+    5. Jika menunggu interval berikutnya masih memenuhi
+       due date, menunggu dipilih daripada overtime.
+    """
+    speed = (
+        float(job["Speed D"])
+        if line == "D"
+        else float(job["Speed BG"])
+    )
+
+    sku_gram = float(
+        job["SKU Gram"]
+    )
+
+    if (
+        speed <= 0
+        or sku_gram <= 0
+    ):
+        return None
+
+    fill_minutes = (
+        float(job["Batch Ton"])
+        * 1_000_000
+        / sku_gram
+        / speed
+    )
+
+    setup_minutes = float(
+        calc_setup(
+            line_state,
+            job,
+        )
+    )
+
+    required_minutes = (
+        setup_minutes
+        + fill_minutes
+    )
+
+    release_datetime = (
+        pd.Timestamp(
+            job["Release Date"]
+        ).normalize()
+        + pd.Timedelta(
+            hours=SHIFT_START_HOUR
+        )
+    )
+
+    cursor_datetime = pd.Timestamp(
+        line_cursor
+    )
+
+    requested_time = max(
+        release_datetime,
+        cursor_datetime,
+    )
+
+    first_position = (
+        find_next_operating_position(
+            operating_intervals,
+            requested_time,
+        )
+    )
+
+    if first_position is None:
+        return None
+
+    start_datetime = (
+        first_position["start"]
+    )
+
+    interval_end = (
+        first_position["interval_end"]
+    )
+
+    regular_remaining = max(
+        (
+            interval_end
+            - start_datetime
+        ).total_seconds()
+        / 60.0,
+        0.0,
+    )
+
+    due_end_datetime = (
+        pd.Timestamp(
+            job["Due Date"]
+        ).normalize()
+        + pd.Timedelta(days=1)
+        - pd.Timedelta(seconds=1)
+    )
+
+    # ---------------------------------------------
+    # OPSI A: mulai pada interval saat ini
+    # ---------------------------------------------
+    finish_now = (
+        start_datetime
+        + pd.Timedelta(
+            minutes=required_minutes
+        )
+    )
+
+    overtime_now = max(
+        required_minutes
+        - regular_remaining,
+        0.0,
+    )
+
+    # ---------------------------------------------
+    # OPSI B: menunggu interval berikutnya
+    # ---------------------------------------------
+    wait_projection = None
+
+    next_interval_index = (
+        first_position[
+            "interval_index"
+        ]
+        + 1
+    )
+
+    if (
+        next_interval_index
+        < len(operating_intervals)
+    ):
+        next_interval = (
+            operating_intervals[
+                next_interval_index
+            ]
+        )
+
+        wait_start = max(
+            pd.Timestamp(
+                next_interval["start"]
+            ),
+            release_datetime,
+        )
+
+        wait_regular_minutes = max(
+            (
+                pd.Timestamp(
+                    next_interval["end"]
+                )
+                - wait_start
+            ).total_seconds()
+            / 60.0,
+            0.0,
+        )
+
+        wait_finish = (
+            wait_start
+            + pd.Timedelta(
+                minutes=required_minutes
+            )
+        )
+
+        wait_overtime = max(
+            required_minutes
+            - wait_regular_minutes,
+            0.0,
+        )
+
+        wait_projection = {
+            "start": wait_start,
+            "finish": wait_finish,
+            "overtime": wait_overtime,
+            "regular_remaining": (
+                wait_regular_minutes
+            ),
+            "interval_end": pd.Timestamp(
+                next_interval["end"]
+            ),
+        }
+
+    # Menunggu dipilih hanya bila:
+    # - ada interval berikutnya;
+    # - job dapat selesai tanpa overtime; dan
+    # - job tetap selesai sebelum due date.
+    use_wait_projection = (
+        wait_projection is not None
+        and wait_projection[
+            "overtime"
+        ] <= LOT_ROUNDING_EPSILON
+        and wait_projection[
+            "finish"
+        ] <= due_end_datetime
+        and overtime_now
+        > LOT_ROUNDING_EPSILON
+    )
+
+    if use_wait_projection:
+        selected_start = (
+            wait_projection["start"]
+        )
+
+        selected_finish = (
+            wait_projection["finish"]
+        )
+
+        selected_overtime = (
+            wait_projection["overtime"]
+        )
+
+        selected_regular_remaining = (
+            wait_projection[
+                "regular_remaining"
+            ]
+        )
+
+        selected_interval_end = (
+            wait_projection[
+                "interval_end"
+            ]
+        )
+
+        scheduling_mode = (
+            "WAIT_NEXT_REGULAR_INTERVAL"
+        )
+
+    else:
+        selected_start = (
+            start_datetime
+        )
+
+        selected_finish = (
+            finish_now
+        )
+
+        selected_overtime = (
+            overtime_now
+        )
+
+        selected_regular_remaining = (
+            regular_remaining
+        )
+
+        selected_interval_end = (
+            interval_end
+        )
+
+        scheduling_mode = (
+            "REGULAR"
+            if selected_overtime
+            <= LOT_ROUNDING_EPSILON
+            else "OVERTIME_TO_FINISH_LOT"
+        )
+
+    late_minutes = max(
+        (
+            selected_finish
+            - due_end_datetime
+        ).total_seconds()
+        / 60.0,
+        0.0,
+    )
+
+    idle_wait_minutes = max(
+        (
+            selected_start
+            - requested_time
+        ).total_seconds()
+        / 60.0,
+        0.0,
+    )
+
+    regular_used_minutes = max(
+        required_minutes
+        - selected_overtime,
+        0.0,
+    )
+
+    residual_regular_minutes = max(
+        selected_regular_remaining
+        - regular_used_minutes,
+        0.0,
+    )
+
+    return {
+        "line": line,
+        "speed": speed,
+        "setup_minutes": setup_minutes,
+        "fill_minutes": fill_minutes,
+        "required_minutes": (
+            required_minutes
+        ),
+        "start_datetime": (
+            selected_start
+        ),
+        "finish_datetime": (
+            selected_finish
+        ),
+        "completion_date": (
+            selected_finish.normalize()
+        ),
+        "overtime_minutes": (
+            selected_overtime
+        ),
+        "regular_used_minutes": (
+            regular_used_minutes
+        ),
+        "residual_regular_minutes": (
+            residual_regular_minutes
+        ),
+        "idle_wait_minutes": (
+            idle_wait_minutes
+        ),
+        "late_minutes": (
+            late_minutes
+        ),
+        "interval_end": (
+            selected_interval_end
+        ),
+        "scheduling_mode": (
+            scheduling_mode
+        ),
+    }
 
 def simulate_one_scenario(forecast_df, scenario, holiday_day_set, candidate_window=DEFAULT_CANDIDATE_WINDOW):
     scenario_code = scenario["Scenario"]
