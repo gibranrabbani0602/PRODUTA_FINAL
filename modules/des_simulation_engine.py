@@ -1574,17 +1574,13 @@ def assign_capacity_release_dates(
         # Contoh:
         # Demand April 2026 due 31 Maret 2026
         # mulai dijadwalkan sejak 1 Maret 2026.
-        capacity_release_date = max(
-            pd.Timestamp(
-                group_start_date
-            ).normalize(),
-            pd.Timestamp(
-                due_date
-            )
-            .to_period("M")
-            .to_timestamp()
-            .normalize(),
-        )
+        # Demand tidak harus menunggu awal bulan demand.
+        # Batas aktual per lot ditentukan oleh:
+        # 1. awal initialization/evaluation; dan
+        # 2. batas umur simpan dengan sisa minimal 3 bulan.
+        capacity_release_date = pd.Timestamp(
+            group_start_date
+        ).normalize()
 
         enough_capacity = True
         
@@ -1631,14 +1627,11 @@ def assign_capacity_release_dates(
 
             final_release_date = max(
                 pd.Timestamp(
-                    capacity_release_date
-                ),
-                pd.Timestamp(
                     earliest_shelf_date
-                ),
+                ).normalize(),
                 pd.Timestamp(
                     role_start_date
-                ),
+                ).normalize(),
             )
 
             jobs.at[
